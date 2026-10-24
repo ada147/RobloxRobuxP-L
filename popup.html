@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Robux P&amp;L</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <!-- Icons (Feather, MIT) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-robux" viewBox="0 0 24 24">
+      <path d="M12 2.2 20.5 7v10L12 21.8 3.5 17V7z" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/>
+      <rect x="9.2" y="9.2" width="5.6" height="5.6" rx="1" fill="currentColor" stroke="none"/>
+    </symbol>
+    <symbol id="i-sync" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></symbol>
+    <symbol id="i-percent" viewBox="0 0 24 24"><line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></symbol>
+    <symbol id="i-dollar" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></symbol>
+  </svg>
+
+  <header class="header">
+    <div class="account">
+      <img id="avatar" class="avatar" alt="" hidden>
+      <div class="avatar avatar-fallback" id="avatarFallback">?</div>
+      <div class="account-text">
+        <div id="displayName" class="display-name">Not connected</div>
+        <div id="username" class="muted small">—</div>
+      </div>
+    </div>
+
+    <nav class="segmented" id="periods" role="tablist" aria-label="Period">
+      <button type="button" data-period="1D">1D</button>
+      <button type="button" data-period="7D">7D</button>
+      <button type="button" data-period="1M">1M</button>
+      <button type="button" data-period="1Y">1Y</button>
+      <button type="button" data-period="ALL">All</button>
+    </nav>
+
+    <div class="toolbar">
+      <button id="btnSync" class="icon-btn primary" type="button" title="Sync now"><svg class="ic"><use href="#i-sync"/></svg></button>
+      <button id="btnTab" class="icon-btn" type="button" title="Open in a tab"><svg class="ic"><use href="#i-expand"/></svg></button>
+      <button id="btnSettings" class="icon-btn" type="button" title="Settings &amp; data"><svg class="ic"><use href="#i-gear"/></svg></button>
+    </div>
+  </header>
+
+  <div class="status" id="status">
+    <span id="syncDot" class="dot"></span>
+    <span id="syncText" class="status-text">Not synced yet</span>
+    <span id="txCount" class="status-meta"></span>
+    <div class="progress"><div id="syncProgress"></div></div>
+  </div>
+
+  <main id="dashboard">
+    <section class="hero">
+      <article class="card hero-card hero-balance">
+        <div class="hero-head">
+          <span class="eyebrow">Robux balance</span>
+          <span class="chip live">Live</span>
+        </div>
+        <div class="hero-value"><svg class="rbx"><use href="#i-robux"/></svg><span id="balance">—</span></div>
+        <div id="balanceDevex" class="hero-sub">—</div>
+        <div class="spark"><canvas id="balanceChart"></canvas></div>
+        <div class="hero-foot muted small" title="Calculated backwards from the live balance and stored transactions">Estimated history · <span class="periodName">—</span></div>
+      </article>
+
+      <article class="card hero-card hero-pnl">
+        <div class="hero-head">
+          <span class="eyebrow">Net P&amp;L</span>
+          <span class="chip periodName">—</span>
+        </div>
+        <div class="hero-value" id="kPnl">—</div>
+        <div id="kDevex" class="hero-sub">—</div>
+        <div class="split">
+          <div class="split-bar"><span id="splitEarned"></span><span id="splitSpent"></span></div>
+          <div class="split-legend">
+            <span><i class="sw green"></i>Earned <b id="kEarned">—</b></span>
+            <span><i class="sw red"></i>Spent <b id="kSpentHero">—</b></span>
+          </div>
+        </div>
+        <div id="kPnlFoot" class="hero-foot muted small">Net profit − total spent</div>
+      </article>
+    </section>
+
+    <section class="stats">
+      <div class="card stat">
+        <div class="stat-icon blue"><svg class="ic"><use href="#i-dollar"/></svg></div>
+        <div class="stat-body"><div class="stat-label">Gross revenue</div><div class="stat-value" id="kGross">—</div><div class="stat-sub" id="kGrossSub">before marketplace fee</div></div>
+      </div>
+      <div class="card stat">
+        <div class="stat-icon green"><svg class="ic"><use href="#i-up"/></svg></div>
+        <div class="stat-body"><div class="stat-label">Net profit</div><div class="stat-value" id="kNet">—</div><div class="stat-sub" id="kNetSub">after marketplace fee</div></div>
+      </div>
+      <div class="card stat">
+        <div class="stat-icon red"><svg class="ic"><use href="#i-down"/></svg></div>
+        <div class="stat-body"><div class="stat-label">Total spent</div><div class="stat-value" id="kSpent">—</div><div class="stat-sub">purchases, ads &amp; trades</div></div>
+      </div>
+      <div class="card stat">
+        <div class="stat-icon amber"><svg class="ic"><use href="#i-percent"/></svg></div>
+        <div class="stat-body"><div class="stat-label">Marketplace fees</div><div class="stat-value" id="kFees">—</div><div class="stat-sub" id="kFeesSub">—</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Cash flow</h2>
+        <div class="legend">
+          <span><i class="sw green"></i>Income</span>
+          <span><i class="sw red"></i>Spending</span>
+          <span><i class="sw blue line"></i>Cumulative P&amp;L</span>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="flowChart"></canvas></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <nav class="tabs" id="tabs" role="tablist">
+          <button type="button" data-tab="breakdown" class="active">By type</button>
+          <button type="button" data-tab="top">Top items</button>
+          <button type="button" data-tab="recent">Recent</button>
+        </nav>
+      </div>
+      <div class="tab-panel" data-panel="breakdown"><table class="table" id="breakdown"><tbody></tbody></table></div>
+      <div class="tab-panel" data-panel="top" hidden><ol class="list ranked" id="topItems"></ol></div>
+      <div class="tab-panel" data-panel="recent" hidden><ul class="list" id="recent"></ul></div>
+    </section>
+  </main>
+
+  <section id="emptyState" class="empty" hidden>
+    <div class="empty-card card">
+      <svg class="rbx big"><use href="#i-robux"/></svg>
+      <h2 id="emptyTitle">No data yet</h2>
+      <p>Log in on <strong>roblox.com</strong> and press <strong>Sync</strong>. The first deep scan reads your entire transaction history – on large accounts this can take a few minutes.</p>
+    </div>
+  </section>
+
+  <div id="backdrop" class="backdrop" hidden></div>
+  <aside id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <h2>Settings &amp; data</h2>
+      <button id="btnCloseSettings" class="icon-btn ghost" type="button" title="Close"><svg class="ic"><use href="#i-x"/></svg></button>
+    </div>
+
+    <h3>Calculation</h3>
+    <div class="form">
+      <label>DevEx rate <span class="muted">USD per Robux</span>
+        <input id="sDevex" type="number" step="0.0001" min="0">
+      </label>
+      <label>Marketplace fee <span class="muted">%</span>
+        <input id="sFee" type="number" step="1" min="0" max="99">
+      </label>
+      <label>Display currency
+        <select id="sCurrency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option></select>
+      </label>
+      <label>USD → EUR rate
+        <input id="sEur" type="number" step="0.01" min="0">
+      </label>
+    </div>
+
+    <h3>Data</h3>
+    <p id="dbInfo" class="muted small"></p>
+    <div class="drawer-actions">
+      <button id="btnDeep" class="btn" type="button">Run full deep scan</button>
+      <button id="btnExport" class="btn" type="button">Export CSV</button>
+      <button id="btnClear" class="btn danger" type="button">Delete local data</button>
+    </div>
+    <p class="muted small">All data stays in this browser. The extension only uses your existing roblox.com session.</p>
+  </aside>
+
+  <script src="lib/dexie.min.js"></script>
+  <script src="lib/chart.umd.min.js"></script>
+  <script src="db.js"></script>
+  <script src="pnl.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
