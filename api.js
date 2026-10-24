@@ -1,21 +1,25 @@
 // Roblox web API client. Requests run with the user's roblox.com session cookie
 // (credentials: 'include' + host_permissions).
 //
-// Pacing is tracked per host ("lane"), since Roblox limits each API separately:
-//  - requests in a lane are spaced at least MIN_DELAY_MS apart;
-//  - x-ratelimit-remaining / x-ratelimit-reset headers are honoured up front,
-//    so we wait for the quota to refill instead of running into a 429;
-//  - every 429 doubles the lane's spacing, a run of successes lowers it again;
-//  - 429 / 5xx / network errors are retried with exponential backoff; if Roblox
-//    keeps limiting, a RATE_LIMITED error lets the caller pause and resume later.
+// Pacing is tracked per host ("lane"), since Roblox limits each API separately.
+// Roblox's limits are "N requests per time window", so instead of blindly
+// backing off, each lane *learns* its budget:
+//  - on a 429 we count how many requests went through in the last 60 s and
+//    set the budget a bit below that; from then on requests are spread evenly
+//    (60 s / budget) and never exceed the budget in any rolling 60 s window;
+//  - the learned budget is persisted, so later syncs start at a safe pace;
+//  - after a long run without 429 the budget is raised by one, but never
+//    back to the rate that was limited;
+//  - x-ratelimit-remaining / x-ratelimit-reset and Retry-After are honoured;
+//  - if Roblox keeps limiting, a RATE_LIMITED error lets the caller pause.
 
 const RobloxAPI = (() => {
   const MIN_DELAY_MS = 300;
-  const MAX_DELAY_MS = 15000;
+  const WINDOW_MS = 60000;
   const MAX_RETRIES = 5;
-  const BACKOFF_BASE_MS = 5000;
-  const BACKOFF_MAX_MS = 120000;
-  const PAGE_LIMIT = 100; // allowed values: 10, 25, 50, 100
+  const PROBE_AFTER = 150;     // successes in a row before trying budget + 1
+  const MIN_SAMPLE = 5;        // fewer requests in the window than this say nothing about the limit
+  const PAGE_LIMIT = 100;      // allowed values: 10, 25, 50, 100
 
   class ApiError extends Error {
     constructor(message, status, code, body = '') {
@@ -28,7 +32,7 @@ const RobloxAPI = (() => {
   }
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const backoff = (attempt) => Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** attempt) + Math.random() * 1000;
+  const backoff = (attempt) => Math.min(120000, 5000 * 2 ** attempt) + Math.random() * 1000;
 
   // Header values can look like "10" or "10, 100;w=60" – the first number is what counts.
   const headerNumber = (res, name) => {
@@ -41,19 +45,38 @@ const RobloxAPI = (() => {
   function laneFor(url) {
     const host = new URL(url).hostname;
     if (!lanes.has(host)) {
-      lanes.set(host, { host, delayMs: MIN_DELAY_MS, okStreak: 0, lastRequestAt: 0, notBefore: 0, queue: Promise.resolve() });
+      lanes.set(host, {
+        host,
+        budget: null,     // learned requests per WINDOW_MS (null = no limit seen yet)
+        ceiling: null,    // budget at which we last got limited – never probe back up to it
+        okStreak: 0,
+        sent: [],         // timestamps of recent requests
+        lastRequestAt: 0,
+        notBefore: 0,
+        queue: Promise.resolve()
+      });
     }
     return lanes.get(host);
   }
 
+  const spacing = (lane) => (lane.budget ? Math.max(MIN_DELAY_MS, WINDOW_MS / lane.budget) : MIN_DELAY_MS);
+
+  function windowWait(lane, now) {
+    lane.sent = lane.sent.filter((t) => t > now - WINDOW_MS);
+    if (!lane.budget || lane.sent.length < lane.budget) return 0;
+    return lane.sent[lane.sent.length - lane.budget] + WINDOW_MS - now;
+  }
+
   // Requests within a lane are serialised through a promise chain so
-  // concurrent callers still respect the spacing.
+  // concurrent callers still respect the pacing.
   function throttle(lane, onRetry) {
     const slot = lane.queue.then(async () => {
-      const wait = Math.max(lane.lastRequestAt + lane.delayMs, lane.notBefore) - Date.now();
+      const now = Date.now();
+      const wait = Math.max(lane.lastRequestAt + spacing(lane) - now, lane.notBefore - now, windowWait(lane, now), 0);
       if (wait > 2000) onRetry?.({ status: 'quota', wait, attempt: 0 });
       if (wait > 0) await sleep(wait);
       lane.lastRequestAt = Date.now();
+      lane.sent.push(lane.lastRequestAt);
     });
     lane.queue = slot.catch(() => {});
     return slot;
@@ -66,27 +89,39 @@ const RobloxAPI = (() => {
   }
 
   function onRateLimited(lane, res) {
+    const now = Date.now();
     lane.okStreak = 0;
-    lane.delayMs = Math.min(MAX_DELAY_MS, lane.delayMs * 2);
+    const inWindow = lane.sent.filter((t) => t > now - WINDOW_MS).length;
+    if (inWindow >= MIN_SAMPLE) {
+      // The request that just failed was one too many – stay comfortably below.
+      const learned = Math.max(1, Math.floor((inWindow - 1) * 0.85));
+      lane.budget = lane.budget ? Math.min(lane.budget - 1, learned) : learned;
+    } else if (lane.budget) {
+      lane.budget = Math.max(1, lane.budget - 1);
+    }
+    if (lane.budget) lane.ceiling = lane.budget + 1;
+
     const reset = headerNumber(res, 'x-ratelimit-reset');
-    if (reset > 0) lane.notBefore = Date.now() + reset * 1000 + 250;
+    if (reset > 0) lane.notBefore = now + reset * 1000 + 250;
   }
 
   function onSuccess(lane) {
-    if (++lane.okStreak >= 20 && lane.delayMs > MIN_DELAY_MS) {
-      lane.okStreak = 0;
-      lane.delayMs = Math.max(MIN_DELAY_MS, Math.round(lane.delayMs * 0.8));
-    }
+    if (!lane.budget || ++lane.okStreak < PROBE_AFTER) return;
+    lane.okStreak = 0;
+    if (!lane.ceiling || lane.budget + 1 < lane.ceiling) lane.budget++;
   }
 
-  /** Learned spacing per host – persisted by the worker so the next run starts at a safe pace. */
+  /** Learned pacing per host – persisted by the worker so the next run starts at a safe pace. */
   function getPacing() {
-    return Object.fromEntries([...lanes.values()].map((l) => [l.host, l.delayMs]));
+    return Object.fromEntries([...lanes.values()].map((l) => [l.host, { budget: l.budget, ceiling: l.ceiling }]));
   }
 
   function setPacing(pacing) {
-    for (const [host, ms] of Object.entries(pacing || {})) {
-      if (Number.isFinite(ms)) laneFor(`https://${host}/`).delayMs = Math.min(MAX_DELAY_MS, Math.max(MIN_DELAY_MS, ms));
+    for (const [host, p] of Object.entries(pacing || {})) {
+      if (!p || typeof p !== 'object') continue; // ignore the older numeric format
+      const lane = laneFor(`https://${host}/`);
+      if (Number.isFinite(p.budget) && p.budget > 0) lane.budget = p.budget;
+      if (Number.isFinite(p.ceiling) && p.ceiling > 0) lane.ceiling = p.ceiling;
     }
   }
 
@@ -125,10 +160,15 @@ const RobloxAPI = (() => {
             res.status === 429 ? 'RATE_LIMITED' : 'RETRY_EXHAUSTED'
           );
         }
+        // With a learned budget the throttle already waits until the window has
+        // room again; the backoff only covers limits we couldn't measure.
         const retryAfter = headerNumber(res, 'Retry-After');
+        const now = Date.now();
         const wait = Math.max(
-          retryAfter > 0 ? retryAfter * 1000 + Math.random() * 1000 : backoff(attempt),
-          lane.notBefore - Date.now()
+          retryAfter > 0 ? retryAfter * 1000 + Math.random() * 1000 : 0,
+          lane.notBefore - now,
+          windowWait(lane, now),
+          lane.budget && res.status === 429 && attempt === 0 ? 2000 : backoff(attempt)
         );
         onRetry?.({ status: res.status, wait, attempt });
         await sleep(wait);
@@ -158,7 +198,7 @@ const RobloxAPI = (() => {
 
   async function getAvatarUrl(userId, opts) {
     const json = await getJson(
-      `https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=48x48&format=Png&isCircular=false`,
+      `https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=150x150&format=Png&isCircular=false`,
       opts
     );
     return json.data?.[0]?.imageUrl || null;

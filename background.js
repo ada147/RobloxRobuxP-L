@@ -16,8 +16,10 @@ importScripts('lib/dexie.min.js', 'db.js', 'api.js', 'pnl.js');
 const ALARM_NAME = 'robux-pnl-autosync';
 const RESUME_ALARM = 'robux-pnl-resume';
 const AUTO_SYNC_MINUTES = 30;
-const AUTO_MIN_GAP_MS = 2 * 60 * 1000;
+const AUTO_MIN_GAP_MS = 10 * 60 * 1000;
 const RATE_LIMIT_PAUSE_MINUTES = 5;
+const FX_URL = 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR'; // ECB reference rates, no key
+const FX_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 
 let activeSync = null;
 let state = null;
@@ -74,7 +76,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
  *       'incremental' – fetch new entries (and resume unfinished deep scans)
  *       'deep'        – forget sync progress and re-scan the whole history
  */
+async function refreshFx() {
+  const { fx } = await chrome.storage.local.get('fx');
+  if (fx && Date.now() - fx.updatedAt < FX_MAX_AGE_MS) return;
+  try {
+    const res = await fetch(FX_URL);
+    const json = await res.json();
+    const rate = Number(json?.rates?.EUR);
+    if (rate > 0) await chrome.storage.local.set({ fx: { usdToEur: rate, date: json.date, updatedAt: Date.now() } });
+  } catch (err) {
+    console.warn('[Robux P&L] Exchange rate update failed', err);
+  }
+}
+
 async function runSync(mode) {
+  refreshFx();
   if (activeSync) return activeSync;
   if (mode === 'auto') {
     const s = await loadState();
@@ -92,12 +108,14 @@ async function doSync(mode) {
   const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20000);
   const progress = { fetched: 0, added: 0 };
 
+  // The popup counts down to waitUntil itself; message is the static fallback.
   const onRetry = ({ status, wait }) => {
-    const secs = Math.ceil(wait / 1000);
-    const message = status === 'quota'
-      ? `Waiting ${secs}s for the Roblox request quota to refill`
-      : `${status === 429 ? 'Rate limited (429)' : status ? `HTTP ${status}` : 'Network error'} – retrying in ${secs}s`;
-    setState({ message });
+    const waitReason = status === 'quota' ? 'quota'
+      : status === 429 ? 'Rate limited (429)' : status ? `HTTP ${status}` : 'Network error';
+    const message = waitReason === 'quota'
+      ? 'Waiting for the Roblox request quota to refill'
+      : `${waitReason} – retrying shortly`;
+    setState({ message, waitUntil: Date.now() + wait, waitReason });
   };
 
   // Start at the pace that worked last time instead of the 300 ms minimum.
@@ -105,7 +123,7 @@ async function doSync(mode) {
 
   try {
     await setState({
-      running: true, mode, phase: 'auth', error: null, errorCode: null, resumeAt: null,
+      running: true, mode, phase: 'auth', error: null, errorCode: null, resumeAt: null, waitUntil: null,
       message: 'Checking Roblox login…', typeIndex: 0, typeCount: 0, typeProgress: 0, startedAt: Date.now()
     });
 
@@ -128,9 +146,9 @@ async function doSync(mode) {
     }
 
     await setState({
-      running: false, phase: 'done', lastSync: Date.now(), lastAdded: progress.added,
+      running: false, phase: 'done', lastSync: Date.now(), lastAdded: progress.added, waitUntil: null,
       typeIndex: types.length, typeProgress: 1, currentType: null,
-      message: progress.added ? `${fmt(progress.added)} new transactions` : 'Up to date'
+      message: progress.added ? `${fmt(progress.added)} new transaction${progress.added === 1 ? '' : 's'}` : 'Up to date'
     });
   } catch (err) {
     if (err.code === 'RATE_LIMITED') {
@@ -139,13 +157,13 @@ async function doSync(mode) {
       chrome.alarms.create(RESUME_ALARM, { when: resumeAt });
       const at = new Date(resumeAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
       await setState({
-        running: false, phase: 'paused', resumeAt, error: null, errorCode: err.code,
+        running: false, phase: 'paused', resumeAt, waitUntil: null, error: null, errorCode: err.code,
         message: `Roblox rate limit – paused, resuming automatically at ${at} (${fmt(progress.added)} new so far)`
       });
     } else {
       console.error('[Robux P&L] Sync failed', err);
       await setState({
-        running: false, phase: 'error', error: err.message, errorCode: err.code || null,
+        running: false, phase: 'error', waitUntil: null, error: err.message, errorCode: err.code || null,
         message: err.code === 'UNAUTHORIZED' ? 'Please log in on roblox.com' : `Error: ${err.message}`
       });
     }
@@ -227,6 +245,7 @@ async function syncType(userId, type, progress, onRetry, pos) {
 
     await setState({
       message: `${deep ? 'Deep scan' : 'Sync'} · ${label} · page ${pages} · ${fmt(progress.fetched)} loaded`,
+      waitUntil: null,
       fetched: progress.fetched,
       added: progress.added,
       typeProgress: (pos.index + (cursor ? 0.5 : 1)) / pos.total

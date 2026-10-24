@@ -36,7 +36,8 @@ const PnL = (() => {
     devexRate: 0.0035,     // USD per Robux
     marketplaceFee: 30,    // percent Roblox keeps on sales
     displayCurrency: 'USD',
-    usdToEur: 0.92
+    usdToEur: 0.92,        // manual rate, used when fxLive is off or no live rate is available
+    fxLive: true
   };
 
   const PERIODS = ['1D', '7D', '1M', '1Y', 'ALL'];
