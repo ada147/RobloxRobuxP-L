@@ -147,8 +147,12 @@ const RobloxAPI = (() => {
         return res.json();
       }
 
-      if (res.status === 401 || res.status === 403) {
+      if (res.status === 401) {
         throw new ApiError('Not logged in on roblox.com', res.status, 'UNAUTHORIZED');
+      }
+      if (res.status === 403) {
+        // Logged in, but not allowed to see this resource (e.g. another group's finances).
+        throw new ApiError('Access denied', res.status, 'FORBIDDEN');
       }
 
       if (res.status === 429 || res.status >= 500) {
@@ -204,9 +208,8 @@ const RobloxAPI = (() => {
     return json.data?.[0]?.imageUrl || null;
   }
 
-  /** One page of transactions, newest first. */
-  async function getTransactionsPage(userId, transactionType, cursor, opts) {
-    const url = new URL(`https://economy.roblox.com/v2/users/${userId}/transactions`);
+  async function transactionsPage(base, transactionType, cursor, opts) {
+    const url = new URL(`${base}/transactions`);
     url.searchParams.set('transactionType', transactionType);
     url.searchParams.set('limit', String(PAGE_LIMIT));
     if (cursor) url.searchParams.set('cursor', cursor);
@@ -215,8 +218,42 @@ const RobloxAPI = (() => {
     return { items: json.data || [], nextCursor: json.nextPageCursor || null };
   }
 
+  /** One page of a user's transactions, newest first. */
+  function getTransactionsPage(userId, transactionType, cursor, opts) {
+    return transactionsPage(`https://economy.roblox.com/v2/users/${userId}`, transactionType, cursor, opts);
+  }
+
+  // ---- groups
+
+  /** [{ group: { id, name, owner }, role: { name, rank } }] – every group the user is in. */
+  async function getUserGroups(userId, opts) {
+    const json = await getJson(`https://groups.roblox.com/v1/users/${userId}/groups/roles`, opts);
+    return json.data || [];
+  }
+
+  /** { robux } – group funds. 403 unless the user may view the group's finances. */
+  function getGroupCurrency(groupId, opts) {
+    return getJson(`https://economy.roblox.com/v1/groups/${groupId}/currency`, opts);
+  }
+
+  /** One page of a group's transactions, newest first. */
+  function getGroupTransactionsPage(groupId, transactionType, cursor, opts) {
+    return transactionsPage(`https://economy.roblox.com/v2/groups/${groupId}`, transactionType, cursor, opts);
+  }
+
+  /** Map groupId -> icon URL. */
+  async function getGroupIcons(groupIds, opts) {
+    if (!groupIds.length) return new Map();
+    const json = await getJson(
+      `https://thumbnails.roblox.com/v1/groups/icons?groupIds=${groupIds.join(',')}&size=150x150&format=Png&isCircular=false`,
+      opts
+    );
+    return new Map((json.data || []).map((d) => [d.targetId, d.imageUrl]));
+  }
+
   return {
     ApiError, getAuthenticatedUser, getCurrency, getTransactionTypes, getAvatarUrl, getTransactionsPage,
+    getUserGroups, getGroupCurrency, getGroupTransactionsPage, getGroupIcons,
     getPacing, setPacing
   };
 })();

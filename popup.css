@@ -64,7 +64,39 @@ h3 { margin: 22px 0 10px; font-size: 11px; font-weight: 700; text-transform: upp
 /* account | period chips (centered) | buttons */
 .header { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 12px; margin-bottom: 10px; }
 .header .toolbar { justify-self: end; }
-.account { display: flex; gap: 11px; align-items: center; min-width: 0; }
+.switcher { position: relative; min-width: 0; }
+.account {
+  display: flex; gap: 11px; align-items: center; min-width: 0; max-width: 100%;
+  font: inherit; color: inherit; text-align: left; background: none; border: 0; padding: 4px 8px 4px 4px; margin: -4px;
+  border-radius: 14px; cursor: pointer; transition: background .15s, box-shadow .2s;
+}
+.account:hover { background: rgba(255, 255, 255, 0.04); box-shadow: inset 0 0 0 1px var(--border); }
+.account .chevron { width: 14px; height: 14px; color: var(--muted); transition: transform .15s; }
+.account[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+.avatar.square { border-radius: 10px; }
+
+.entity-menu {
+  position: absolute; z-index: 20; top: calc(100% + 10px); left: -4px; width: 300px; max-height: 360px; overflow-y: auto;
+  padding: 6px; border-radius: 16px; background: rgba(28, 28, 34, 0.97); backdrop-filter: blur(12px);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg), 0 0 50px -16px rgba(108, 108, 255, 0.6);
+}
+.menu-title { padding: 6px 10px 4px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--faint); }
+.menu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; cursor: pointer; text-align: left;
+  font: inherit; color: var(--text); background: transparent; border: 0; border-radius: 11px;
+}
+.menu-item:hover { background: rgba(255, 255, 255, 0.05); }
+.menu-item.active { background: rgba(108, 108, 255, 0.14); box-shadow: inset 0 0 0 1px rgba(108, 108, 255, 0.35), 0 0 20px -8px rgba(108, 108, 255, 0.8); }
+.menu-item .avatar.sm { width: 30px; height: 30px; box-shadow: 0 0 0 2px var(--surface-3); font-size: 12px; }
+.menu-item .menu-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.menu-item .menu-text b, .menu-item .menu-text small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu-item .menu-text b { font-weight: 650; }
+.menu-item .menu-text small { color: var(--muted); font-size: 11px; }
+.menu-item .menu-robux { font-size: 11.5px; font-weight: 650; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+a.icon-btn { text-decoration: none; }
+.ic.gh { width: 16px; height: 16px; }
 .account-text { min-width: 0; }
 .avatar {
   width: 40px; height: 40px; border-radius: 50%; background: var(--surface-2); object-fit: cover; flex: none;
@@ -139,7 +171,9 @@ body.full .side-col { display: flex; flex-direction: column; gap: 18px; min-heig
 body.full .side-card { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 body.full .side-card.recent-card { flex-grow: 1.4; }
 .card-body { min-height: 0; }
-body.full .card-body { flex: 1; overflow-y: auto; margin-right: -8px; padding-right: 8px; }
+/* The scroll box clips at its padding edge – the padding (offset by negative margins)
+   leaves room for the glow around icons and badges. */
+body.full .card-body { flex: 1; overflow-y: auto; margin: -10px -12px -12px; padding: 10px 12px 12px; }
 body.full .card-body::-webkit-scrollbar { width: 6px; }
 body.full .card-body::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 3px; }
 
@@ -385,6 +419,7 @@ body.full .chart-card .chart-host { flex: 1; min-height: 0; }
   font-size: 11.5px; font-weight: 700; color: var(--muted); background: var(--surface-2);
 }
 .ranked li:first-child::before { color: #0e0e10; background: var(--amber); box-shadow: 0 0 16px -4px var(--amber); }
+.ranked li.empty-row::before { content: none; }
 .pending { color: var(--amber); font-style: normal; font-size: 10.5px; font-weight: 600; margin-left: 6px; }
 
 /* ------------------------------------------------------------- drawer & modal */
@@ -444,9 +479,12 @@ body:not(.full) .header { gap: 8px; }
 body:not(.full) .avatar { width: 34px; height: 34px; }
 body:not(.full) .account { gap: 9px; }
 body:not(.full) .display-name { font-size: 14px; }
-body:not(.full) .toolbar { gap: 5px; }
-body:not(.full) .icon-btn { width: 30px; height: 30px; }
-body:not(.full) .icon-btn .ic { width: 14px; height: 14px; }
+body:not(.full) .toolbar { gap: 4px; }
+body:not(.full) .icon-btn { width: 28px; height: 28px; }
+body:not(.full) .icon-btn .ic { width: 13px; height: 13px; }
+body:not(.full) #periods { gap: 3px; }
+body:not(.full) #periods button { padding: 5px 7px; min-width: 30px; }
+body:not(.full) .entity-menu { width: 280px; }
 body:not(.full) .card { padding: 14px 15px; margin-bottom: 12px; }
 body:not(.full) .hero { gap: 12px; margin-bottom: 12px; }
 body:not(.full) .hero-value { font-size: 28px; margin-top: 8px; }

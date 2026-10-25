@@ -1,6 +1,20 @@
 # Robux P&L Dashboard (Chrome Extension, MV3)
 
-Reads your Roblox transactions through the economy API, stores the full history locally in IndexedDB (Dexie.js) and shows a profit & loss statement plus a Robux balance dashboard in the popup.
+Reads your Roblox transactions through the economy API, stores the full history locally in IndexedDB (Dexie.js) and shows a profit & loss statement plus a Robux balance dashboard in the popup – for your account and for every group you own.
+
+Source: <https://github.com/alphabjarnegit/RobloxRobuxP-L>
+
+## Groups
+
+Groups you own (rank 255) show up in the account switcher (click your name in the header). Each group gets its own dashboard: group funds as the balance, its own P&L, chart, top items and share image.
+
+- Group sales go to the group, not to you, so they're tracked under the group. Seen from the group, **Member Payouts** (group payouts) leave the funds like a cash-out – they aren't an expense. On your own dashboard the same payouts count as income. Nothing is counted twice.
+- Groups whose finances Roblox won't show (403) are listed but not synced.
+- Each group adds its own deep scan to the first sync; the learned rate limit applies to all of them.
+
+## roblox.com navbar button
+
+While you're on roblox.com, a white line icon (in the style of Roblox's own navbar icons) sits left of your Robux balance. Hover it and "P&L Viewer" slides out; click it and the extension popup drops down right below it (the popup page embedded in the site, so it works in every Chrome version). Click outside or press Esc to close it. The tooltip shows your net P&L of the last 24 hours.
 
 ## Files
 
@@ -14,6 +28,7 @@ Reads your Roblox transactions through the economy API, stores the full history 
 | `popup.html` / `popup.css` / `popup.js` | Dashboard – compact popup with the essentials, full trading-terminal view in a tab (⤢) |
 | `pricechart.js` | Candlestick / line / area price chart with volume and OHLC legend |
 | `share.js` | Renders the 1200×675 share image ("flex card") |
+| `content.js` / `content.css` | Adds the P&L button to the roblox.com navbar |
 | `lib/` | Dexie 4.0.8 and TradingView Lightweight Charts™ 4.2.0 (Apache 2.0), bundled locally (MV3 forbids remote code) |
 
 ## Popup vs. full view

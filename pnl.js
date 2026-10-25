@@ -24,6 +24,21 @@ const PnL = (() => {
     DevEx:                    { label: 'DevEx',                  category: 'cashout' }
   };
 
+  // Transaction types queried for groups. Seen from the group, a GroupPayout is money
+  // paid out to members – it leaves the group funds but isn't a business expense.
+  const GROUP_TYPES = [
+    'Sale', 'AffiliateSale', 'EngagementPayout', 'GroupEngagementPayout', 'AdImpressionPayout',
+    'PublishingAdvanceRebates', 'Purchase', 'AdSpend', 'GroupPayout'
+  ];
+  const GROUP_OVERRIDES = {
+    GroupPayout: { label: 'Member Payouts', category: 'cashout' }
+  };
+
+  /** Type definition for a stored transaction (group records may classify differently). */
+  function defOf(t) {
+    return (t.scope === 'group' && GROUP_OVERRIDES[t.type]) || TYPES[t.type];
+  }
+
   const CATEGORY_LABELS = {
     earning: 'Income',
     spending: 'Expense',
@@ -130,7 +145,7 @@ const PnL = (() => {
 
   /** Splits one transaction into P&L components (all values positive Robux). */
   function classify(t) {
-    const def = TYPES[t.type];
+    const def = defOf(t);
     const out = { earnTaxed: 0, earnOther: 0, spent: 0, funding: 0, cashout: 0 };
     if (!def || t.currency !== 'Robux') return out;
     const abs = Math.abs(t.amount);
@@ -158,7 +173,7 @@ const PnL = (() => {
 
     for (const t of txs) {
       const c = classify(t);
-      if (!TYPES[t.type] || t.currency !== 'Robux') continue;
+      if (!defOf(t) || t.currency !== 'Robux') continue;
       count++;
       salesNet += c.earnTaxed;
       otherEarn += c.earnOther;
@@ -255,7 +270,7 @@ const PnL = (() => {
   function breakdown(txs) {
     const rows = new Map();
     for (const t of txs) {
-      const def = TYPES[t.type];
+      const def = defOf(t);
       if (!def || t.currency !== 'Robux') continue;
       const c = classify(t);
       const signed = c.earnTaxed + c.earnOther + c.funding - c.spent - c.cashout;
@@ -287,7 +302,7 @@ const PnL = (() => {
   }
 
   return {
-    TYPES, CATEGORY_LABELS, DEFAULT_SETTINGS, PERIODS,
+    TYPES, GROUP_TYPES, CATEGORY_LABELS, DEFAULT_SETTINGS, PERIODS, defOf,
     periodWindow, candleWindow, classify, balanceDelta, summarize, series, ohlc, breakdown, topItems, toDisplayMoney
   };
 })();

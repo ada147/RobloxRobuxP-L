@@ -6,9 +6,27 @@
   "description": "Personal profit & loss statement and Robux balance dashboard built from your Roblox transaction history.",
   "permissions": ["storage", "alarms", "unlimitedStorage"],
   "host_permissions": ["https://*.roblox.com/*", "https://*.rbxcdn.com/*", "https://api.frankfurter.dev/*"],
+  "homepage_url": "https://github.com/alphabjarnegit/RobloxRobuxP-L",
   "background": {
     "service_worker": "background.js"
   },
+  "content_scripts": [
+    {
+      "matches": ["https://www.roblox.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "popup.html", "popup.css", "popup.js", "db.js", "pnl.js", "share.js", "pricechart.js",
+        "lib/dexie.min.js", "lib/lightweight-charts.standalone.production.js", "icons/icon128.png"
+      ],
+      "matches": ["https://www.roblox.com/*"]
+    }
+  ],
   "action": {
     "default_title": "Robux P&L",
     "default_popup": "popup.html",

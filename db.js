@@ -13,14 +13,22 @@ db.version(1).stores({
   syncMeta: 'key, userId'
 });
 
+// Records belong to an "owner": the user's own id, or the negated group id for
+// groups (-groupId). User and group ids can't collide that way, and existing
+// user data needs no migration. Everything keyed by "userId" below is an owner id.
 const DB = {
+  ownerOfGroup: (groupId) => -groupId,
+
   /** Normalises a raw API transaction into the record we store. */
-  toRecord(userId, type, t) {
+  toRecord(ownerId, type, t) {
     const created = Date.parse(t.created);
     if (!Number.isFinite(created)) return null;
+    const group = ownerId < 0;
+    const id = t.idHash || `${type}:${t.id}:${t.created}`;
     return {
-      key: t.idHash || `${type}:${t.id}:${t.created}`,
-      userId,
+      key: group ? `g${-ownerId}:${id}` : id,   // a group's sale and a member's purchase may share an idHash
+      userId: ownerId,
+      scope: group ? 'group' : 'user',
       type,                                   // the type we queried for (used for classification)
       apiType: t.transactionType || type,     // what the API itself reports
       created,

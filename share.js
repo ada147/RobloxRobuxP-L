@@ -74,20 +74,24 @@ const ShareCard = (() => {
     ctx.stroke();
   }
 
-  function avatar(ctx, img, cx, cy, r, letter) {
+  /** Round avatar for users, rounded square for group icons. */
+  function avatar(ctx, img, cx, cy, r, letter, square = false) {
+    const shape = (grow = 0) => {
+      ctx.beginPath();
+      if (square) ctx.roundRect(cx - r - grow, cy - r - grow, (r + grow) * 2, (r + grow) * 2, r * 0.42 + grow);
+      else ctx.arc(cx, cy, r + grow, 0, Math.PI * 2);
+    };
     ctx.save();
     ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
     ctx.shadowBlur = 24;
     ctx.shadowOffsetY = 8;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    shape();
     ctx.fillStyle = '#26262b';
     ctx.fill();
     ctx.restore();
 
     ctx.save();
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    shape();
     ctx.clip();
     if (img) {
       ctx.drawImage(img, cx - r, cy - r, r * 2, r * 2);
@@ -102,8 +106,7 @@ const ShareCard = (() => {
 
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
     ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r + 1.5, 0, Math.PI * 2);
+    shape(1.5);
     ctx.stroke();
   }
 
@@ -195,7 +198,7 @@ const ShareCard = (() => {
   }
 
   /**
-   * d = { displayName, username, avatar, logo, periodName, rangeText, metrics,
+   * d = { displayName, handle, avatar, squareAvatar, logo, periodName, rangeText, metrics, balanceLabel,
    *       cumulative, balance, showBalance, robux(n, opts), money(usd) }
    */
   function render(canvas, d) {
@@ -223,14 +226,14 @@ const ShareCard = (() => {
     // --- top right: avatar + names
     const r = 36;
     const acx = W - PAD - r, acy = PAD + 30;
-    avatar(ctx, d.avatar, acx, acy, r, (d.displayName || '?').charAt(0).toUpperCase());
+    avatar(ctx, d.avatar, acx, acy, r, (d.displayName || '?').charAt(0).toUpperCase(), d.squareAvatar);
     ctx.textAlign = 'right';
     ctx.fillStyle = C.text;
     fit(ctx, d.displayName, 700, 26, 360);
     ctx.fillText(d.displayName, acx - r - 20, acy + 2);
     ctx.fillStyle = C.muted;
     ctx.font = font(500, 18);
-    ctx.fillText(`@${d.username}`, acx - r - 20, acy + 28);
+    ctx.fillText(d.handle, acx - r - 20, acy + 28);
 
     // --- hero number
     const hero = d.robux(m.netPnl, { sign: true });
@@ -259,7 +262,7 @@ const ShareCard = (() => {
       ['Net profit', d.robux(m.netProfit), C.green],
       ['Total spent', d.robux(m.totalSpent), C.red]
     ];
-    if (d.showBalance && Number.isFinite(d.balance)) stats.push(['Balance', d.robux(d.balance)]);
+    if (d.showBalance && Number.isFinite(d.balance)) stats.push([d.balanceLabel || 'Balance', d.robux(d.balance)]);
     const gap = 20;
     const pw = (W - PAD * 2 - gap * (stats.length - 1)) / stats.length;
     stats.forEach(([label, value, color], i) => pill(ctx, PAD + i * (pw + gap), 418, pw, 112, label, value, color));

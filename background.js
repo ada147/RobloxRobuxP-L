@@ -9,6 +9,7 @@
 //    transaction that is already stored and settled (not pending).
 // Types the account has never used are skipped (one transaction-types request),
 // which keeps the number of rate-limited transaction requests low.
+// Groups the user owns are synced the same way, each under its own owner id.
 // Progress is published to chrome.storage.local.syncState for the popup.
 
 importScripts('lib/dexie.min.js', 'db.js', 'api.js', 'pnl.js');
@@ -62,8 +63,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: true });
     return;
   }
+  if (msg?.type === 'OPEN_DASHBOARD') {
+    chrome.tabs.create({ url: chrome.runtime.getURL('popup.html?view=tab') });
+    sendResponse({ ok: true });
+    return;
+  }
+  if (msg?.type === 'QUICK_PNL') {
+    quickPnl().then(sendResponse, () => sendResponse(null));
+    return true; // async response
+  }
   if (msg?.type === 'RESET_DATA') {
-    resetData(msg.userId).then(
+    resetData(msg.ownerId).then(
       () => sendResponse({ ok: true }),
       (err) => sendResponse({ ok: false, error: err.message })
     );
@@ -135,19 +145,46 @@ async function doSync(mode) {
       account: { userId: user.id, name: user.name, displayName: user.displayName, avatarUrl, robux, balanceAt: Date.now() }
     });
 
-    if (mode === 'deep') await DB.resetSyncMeta(user.id);
+    const groups = await loadOwnedGroups(user, onRetry);
 
-    const types = await activeTypes(user.id, onRetry);
-    await setState({ typeCount: types.length });
+    // One work list across the user and every group the user owns.
+    const accounts = [{
+      ownerId: user.id,
+      prefix: '',
+      types: await activeTypes(user.id, onRetry),
+      fetchPage: (type, cursor, opts) => RobloxAPI.getTransactionsPage(user.id, type, cursor, opts)
+    }];
+    for (const g of groups.filter((x) => x.access)) {
+      accounts.push({
+        ownerId: DB.ownerOfGroup(g.groupId),
+        prefix: `${g.name} · `,
+        types: PnL.GROUP_TYPES,
+        fetchPage: (type, cursor, opts) => RobloxAPI.getGroupTransactionsPage(g.groupId, type, cursor, opts),
+        group: g
+      });
+    }
+    const total = accounts.reduce((n, a) => n + a.types.length, 0);
+    await setState({ typeCount: total });
 
-    for (let i = 0; i < types.length; i++) {
-      await setState({ phase: 'transactions', typeIndex: i, currentType: types[i] });
-      await syncType(user.id, types[i], progress, onRetry, { index: i, total: types.length });
+    let step = 0;
+    for (const acct of accounts) {
+      if (mode === 'deep') await DB.resetSyncMeta(acct.ownerId);
+      try {
+        for (const type of acct.types) {
+          await setState({ phase: 'transactions', typeIndex: step, currentType: type });
+          await syncType(acct, type, progress, onRetry, { index: step++, total });
+        }
+      } catch (err) {
+        if (!acct.group || err.code !== 'FORBIDDEN') throw err;
+        // Lost access to this group's finances – keep its old data, skip it.
+        acct.group.access = false;
+        await chrome.storage.local.set({ groups });
+      }
     }
 
     await setState({
       running: false, phase: 'done', lastSync: Date.now(), lastAdded: progress.added, waitUntil: null,
-      typeIndex: types.length, typeProgress: 1, currentType: null,
+      typeIndex: total, typeProgress: 1, currentType: null,
       message: progress.added ? `${fmt(progress.added)} new transaction${progress.added === 1 ? '' : 's'}` : 'Up to date'
     });
   } catch (err) {
@@ -174,6 +211,44 @@ async function doSync(mode) {
 }
 
 /**
+ * Groups the user owns (rank 255), with funds and icon, saved to storage for the
+ * account switcher. access=false when Roblox refuses to show the group's finances.
+ * If the group list can't be loaded, the previously stored list is kept.
+ */
+async function loadOwnedGroups(user, onRetry) {
+  const previous = (await chrome.storage.local.get('groups')).groups || [];
+  let memberships;
+  try {
+    memberships = await RobloxAPI.getUserGroups(user.id, { onRetry });
+  } catch (err) {
+    if (err.code === 'RATE_LIMITED') throw err;
+    console.warn('[Robux P&L] Could not load groups', err);
+    return previous;
+  }
+
+  const owned = memberships.filter((m) => m.role?.rank === 255 || m.group?.owner?.userId === user.id);
+  const icons = await RobloxAPI.getGroupIcons(owned.map((m) => m.group.id), { onRetry }).catch(() => new Map());
+
+  const groups = [];
+  for (const m of owned) {
+    const g = {
+      groupId: m.group.id, name: m.group.name, role: m.role?.name || 'Owner',
+      iconUrl: icons.get(m.group.id) || null, robux: null, balanceAt: null, access: true
+    };
+    try {
+      g.robux = (await RobloxAPI.getGroupCurrency(g.groupId, { onRetry })).robux;
+      g.balanceAt = Date.now();
+    } catch (err) {
+      if (err.code !== 'FORBIDDEN') throw err;
+      g.access = false;
+    }
+    groups.push(g);
+  }
+  await chrome.storage.local.set({ groups });
+  return groups;
+}
+
+/**
  * One request tells us which transaction types the account has at all
  * (HasSale, HasPurchase, …). Types flagged false are skipped; types the
  * response doesn't mention are still queried. Falls back to all types.
@@ -195,19 +270,21 @@ async function activeTypes(userId, onRetry) {
   return all.filter((type) => has.get(type.toLowerCase()) !== false);
 }
 
-async function syncType(userId, type, progress, onRetry, pos) {
-  const meta = await DB.getSyncMeta(userId, type);
+/** acct: { ownerId, prefix, fetchPage(type, cursor, opts) } – the user or one of their groups. */
+async function syncType(acct, type, progress, onRetry, pos) {
+  const { ownerId } = acct;
+  const meta = await DB.getSyncMeta(ownerId, type);
   if (meta.unsupported) return;
 
   const deep = !meta.deepDone;
-  const label = PnL.TYPES[type].label;
+  const label = acct.prefix + PnL.defOf({ type, scope: ownerId < 0 ? 'group' : 'user' }).label;
   let cursor = deep ? meta.cursor : null;
   let pages = 0;
 
   for (;;) {
     let page;
     try {
-      page = await RobloxAPI.getTransactionsPage(userId, type, cursor, { onRetry });
+      page = await acct.fetchPage(type, cursor, { onRetry });
     } catch (err) {
       if (err.status === 400 && !cursor) {
         // This account/API doesn't accept the type – remember and skip it.
@@ -223,7 +300,7 @@ async function syncType(userId, type, progress, onRetry, pos) {
     }
 
     pages++;
-    let records = page.items.map((t) => DB.toRecord(userId, type, t)).filter(Boolean);
+    let records = page.items.map((t) => DB.toRecord(ownerId, type, t)).filter(Boolean);
     const existing = await DB.getByKeys(records.map((r) => r.key));
     let reachedKnown = false;
 
@@ -254,14 +331,24 @@ async function syncType(userId, type, progress, onRetry, pos) {
     if (reachedKnown || !cursor) break;
   }
 
-  await DB.saveSyncMeta({ ...(await DB.getSyncMeta(userId, type)), lastSync: Date.now() });
+  await DB.saveSyncMeta({ ...(await DB.getSyncMeta(ownerId, type)), lastSync: Date.now() });
 
   // Entries that arrived while a long deep scan was running sit above where it started.
-  if (deep) await syncType(userId, type, progress, onRetry, pos);
+  if (deep) await syncType(acct, type, progress, onRetry, pos);
 }
 
-async function resetData(userId) {
+/** Net P&L of the user's last 24 hours – for the tooltip on the roblox.com navbar button. */
+async function quickPnl() {
+  const { account, settings } = await chrome.storage.local.get(['account', 'settings']);
+  if (!account) return null;
+  const now = Date.now();
+  const m = PnL.summarize(await DB.getRange(account.userId, now - 864e5, now), settings);
+  return { netPnl: m.netPnl, count: m.count };
+}
+
+/** ownerId: the user's id or -groupId (see db.js). */
+async function resetData(ownerId) {
   if (activeSync) throw new Error('Not possible while a sync is running');
-  if (userId) await DB.clearUser(userId);
+  if (ownerId) await DB.clearUser(ownerId);
   await setState({ phase: 'reset', lastSync: null, message: 'Local data deleted', error: null });
 }

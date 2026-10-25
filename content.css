@@ -1,0 +1,109 @@
+/* Navbar button on roblox.com – everything prefixed rpl- to stay out of Roblox's styles.
+   The icon uses currentColor (taken from the neighbouring Robux item) so it matches
+   Roblox's own white line icons. Vertical position is fine-tuned by content.js (--rpl-dy). */
+#rpl-navbar-item {
+  display: flex;
+  align-items: center;
+  margin: 0 4px;
+  padding: 0;
+  list-style: none;
+  overflow: visible;
+}
+
+#rpl-navbar-item .rpl-btn {
+  --rpl-dy: 0px;
+  display: flex;
+  align-items: center;
+  height: 32px;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  line-height: 1;
+  /* alignment applies instantly; only the hover effects animate */
+  translate: 0 var(--rpl-dy);
+  transition: background-color 0.2s ease, padding 0.25s ease;
+}
+
+#rpl-navbar-item .rpl-icon {
+  display: block;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  color: inherit;
+  transition: filter 0.2s ease;
+}
+
+/* "P&L Viewer" slides out of the icon on hover */
+#rpl-navbar-item .rpl-label {
+  display: block;
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateX(10px);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: max-width 0.28s ease, opacity 0.2s ease, transform 0.28s ease, margin 0.28s ease;
+}
+
+#rpl-navbar-item .rpl-btn:hover,
+#rpl-navbar-item .rpl-btn:focus-visible {
+  padding: 0 2px 0 10px; /* right side unchanged, so the icon doesn't move */
+  background-color: rgba(255, 255, 255, 0.08);
+}
+#rpl-navbar-item .rpl-btn:hover .rpl-label,
+#rpl-navbar-item .rpl-btn:focus-visible .rpl-label {
+  max-width: 100px;
+  margin-right: 6px;
+  opacity: 1;
+  transform: none;
+}
+#rpl-navbar-item .rpl-btn:hover .rpl-icon { filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.35)); }
+#rpl-navbar-item .rpl-btn:active { background-color: rgba(255, 255, 255, 0.14); }
+#rpl-navbar-item .rpl-btn:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+#rpl-navbar-item .rpl-btn[aria-expanded="true"] { background-color: rgba(255, 255, 255, 0.12); }
+
+/* Dropdown with the extension popup, below the icon */
+#rpl-popover {
+  --rpl-arrow-x: 50%;
+  position: fixed;
+  z-index: 2147483000;
+  width: 560px;
+  border-radius: 20px;
+  background: #0b0b0e;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow: 0 30px 80px -10px rgba(0, 0, 0, 0.9), 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 60px -18px rgba(108, 108, 255, 0.55);
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+  transform-origin: var(--rpl-arrow-x) 0;
+  transition: opacity 0.16s ease, transform 0.18s ease;
+}
+#rpl-popover.open { opacity: 1; transform: none; }
+#rpl-popover::before {
+  content: "";
+  position: absolute;
+  top: -7px;
+  left: calc(var(--rpl-arrow-x) - 7px);
+  width: 14px;
+  height: 14px;
+  background: #121216;
+  border-left: 1px solid rgba(255, 255, 255, 0.11);
+  border-top: 1px solid rgba(255, 255, 255, 0.11);
+  transform: rotate(45deg);
+  border-radius: 3px 0 0 0;
+}
+#rpl-popover iframe {
+  position: relative;
+  display: block;
+  width: 560px;
+  border: 0;
+  border-radius: 20px;
+  background: #0b0b0e;
+  color-scheme: dark;
+}

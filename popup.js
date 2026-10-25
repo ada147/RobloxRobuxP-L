@@ -9,10 +9,13 @@ const ui = {
   chartType: 'candles',   // candles | line | area (full view)
   chartSeries: 'balance', // balance | pnl (full view)
   full: false,
+  embed: false,           // popup page shown as the dropdown on roblox.com
   settings: { ...PnL.DEFAULT_SETTINGS },
   fx: null,
   pacing: null,
   account: null,
+  groups: [],             // groups the user owns (from the worker)
+  entity: 'me',           // 'me' or a groupId – whose dashboard is shown
   syncState: null
 };
 
@@ -105,21 +108,91 @@ function setDelta(node, cur, prev, { invert = false } = {}) {
   node.append(el('span', { className: `delta ${good == null ? '' : good ? 'up' : 'down'}`, textContent: text }), ' vs previous');
 }
 
+// ------------------------------------------------------------------ entities (you / your groups)
+
+/** Whose dashboard is shown: the user, or one of the groups they own. */
+function currentEntity() {
+  const a = ui.account;
+  if (!a) return null;
+  const g = ui.entity !== 'me' && ui.groups.find((x) => x.groupId === ui.entity);
+  if (g) {
+    return {
+      kind: 'group', key: g.groupId, ownerId: DB.ownerOfGroup(g.groupId), name: g.name,
+      handle: `Group · ${g.role}`, iconUrl: g.iconUrl, robux: g.robux ?? 0, access: g.access
+    };
+  }
+  return {
+    kind: 'user', key: 'me', ownerId: a.userId, name: a.displayName,
+    handle: `@${a.name}`, iconUrl: a.avatarUrl, robux: a.robux, access: true
+  };
+}
+
+function avatarNode(url, letter, className = 'avatar') {
+  if (url) return el('img', { className, src: url, alt: '' });
+  return el('div', { className: `${className} avatar-fallback`, textContent: (letter || '?').charAt(0).toUpperCase() });
+}
+
+function renderEntityMenu() {
+  const a = ui.account;
+  const menu = $('entityMenu');
+  menu.replaceChildren();
+  $('entityChevron').toggleAttribute('hidden', !a || !ui.groups.length); // SVG: no .hidden property
+  if (!a) return;
+
+  const items = [
+    { key: 'me', name: a.displayName, sub: `@${a.name} · You`, url: a.avatarUrl, robux: a.robux, access: true },
+    ...ui.groups.map((g) => ({
+      key: g.groupId, name: g.name, url: g.iconUrl, robux: g.robux, access: g.access,
+      sub: g.access ? `Group · ${g.role}` : 'Group · no access to funds'
+    }))
+  ];
+  menu.append(el('div', { className: 'menu-title', textContent: 'Show dashboard for' }));
+  for (const it of items) {
+    const active = it.key === ui.entity;
+    const btn = el('button', { type: 'button', className: `menu-item${active ? ' active' : ''}`, role: 'menuitemradio' }, [
+      avatarNode(it.url, it.name, 'avatar sm'),
+      el('span', { className: 'menu-text' }, [el('b', { textContent: it.name }), el('small', { textContent: it.sub })]),
+      el('span', { className: 'menu-robux', textContent: it.access && it.robux != null ? robux(it.robux) : '' })
+    ]);
+    btn.setAttribute('aria-checked', String(active));
+    btn.addEventListener('click', () => selectEntity(it.key));
+    menu.append(btn);
+  }
+}
+
+function toggleEntityMenu(open = $('entityMenu').hidden) {
+  if (open && (!ui.account || !ui.groups.length)) return;
+  $('entityMenu').hidden = !open;
+  $('entityBtn').setAttribute('aria-expanded', String(open));
+}
+
+async function selectEntity(key) {
+  toggleEntityMenu(false);
+  if (key === ui.entity) return;
+  ui.entity = key;
+  await chrome.storage.local.set({ entity: key });
+  renderAccount();
+  scheduleRender();
+}
+
 // ------------------------------------------------------------------ header & sync
 
 function renderAccount() {
-  const a = ui.account;
-  $('displayName').textContent = a ? a.displayName : 'Not connected';
-  $('username').textContent = a ? `@${a.name}` : 'Log in on roblox.com';
-  $('username').title = a ? `User ID ${a.userId}` : '';
-  $('balance').textContent = a ? nf.format(a.robux) : '—';
-  $('balanceDevex').textContent = a ? `≈ ${money(a.robux * ui.settings.devexRate)} DevEx value` : '—';
+  const e = currentEntity();
+  $('displayName').textContent = e ? e.name : 'Not connected';
+  $('username').textContent = e ? e.handle : 'Log in on roblox.com';
+  $('username').title = e?.kind === 'user' ? `User ID ${ui.account.userId}` : e ? `Group ID ${e.key}` : '';
+  $('balanceLabel').textContent = e?.kind === 'group' ? 'Group funds' : 'Robux balance';
+  $('balance').textContent = e ? nf.format(e.robux) : '—';
+  $('balanceDevex').textContent = e ? `≈ ${money(e.robux * ui.settings.devexRate)} DevEx value` : '—';
 
-  const hasAvatar = Boolean(a?.avatarUrl);
+  const hasAvatar = Boolean(e?.iconUrl);
   $('avatar').hidden = !hasAvatar;
+  $('avatar').classList.toggle('square', e?.kind === 'group');
   $('avatarFallback').hidden = hasAvatar;
-  if (hasAvatar) $('avatar').src = a.avatarUrl;
-  if (a) $('avatarFallback').textContent = (a.displayName || '?').charAt(0).toUpperCase();
+  if (hasAvatar) $('avatar').src = e.iconUrl;
+  if (e) $('avatarFallback').textContent = (e.name || '?').charAt(0).toUpperCase();
+  renderEntityMenu();
 }
 
 function renderSync() {
@@ -153,8 +226,9 @@ function renderSync() {
 
 // ------------------------------------------------------------------ data
 
-/** Metrics for a period (+ the previous period of equal length) and the candle data. */
-async function loadPeriod(userId, period, { series = 'balance' } = {}) {
+/** Metrics for a period (+ the previous period of equal length) and the candle data of an entity. */
+async function loadPeriod(entity, period, { series = 'balance' } = {}) {
+  const { ownerId: userId, robux: balance } = entity;
   const now = Date.now();
   const firstTs = await DB.getFirstTimestamp(userId);
   const win = PnL.periodWindow(period, now, firstTs);
@@ -171,11 +245,11 @@ async function loadPeriod(userId, period, { series = 'balance' } = {}) {
 
   // Balance candles are anchored at the live balance, so they need everything up to now.
   const candleTxs = await DB.getRange(userId, cw.from, now + 864e5);
-  const balanceCandles = PnL.ohlc(candleTxs, cw.buckets, { mode: 'balance', currentBalance: ui.account.robux });
+  const balanceCandles = PnL.ohlc(candleTxs, cw.buckets, { mode: 'balance', currentBalance: balance });
   const chosen = series === 'pnl' ? PnL.ohlc(candleTxs, cw.buckets, { mode: 'pnl' }) : balanceCandles;
   return {
     win, txs, m, prev,
-    series: PnL.series(txs, win.buckets, ui.account.robux),
+    series: PnL.series(txs, win.buckets, balance),
     balance: balanceCandles,
     chart: { ...chosen, interval: cw.interval, intraday: cw.intraday }
   };
@@ -219,11 +293,17 @@ function ensureChart() {
 
 async function renderDashboard() {
   lastRenderAt = Date.now();
-  const a = ui.account;
-  $('dashboard').hidden = !a;
-  $('emptyState').hidden = Boolean(a);
-  if (!a) {
-    $('emptyTitle').textContent = ui.syncState?.errorCode === 'UNAUTHORIZED' ? 'Not logged in' : 'No data yet';
+  const e = currentEntity();
+  const show = Boolean(e?.access);
+  $('dashboard').hidden = !show;
+  $('emptyState').hidden = show;
+  if (!show) {
+    if (e) {
+      $('emptyTitle').textContent = `No access to ${e.name}`;
+      $('emptyText').textContent = 'Roblox doesn\'t let this account view the group\'s funds and transactions. Only the owner (or a role with finance permissions) can.';
+    } else {
+      $('emptyTitle').textContent = ui.syncState?.errorCode === 'UNAUTHORIZED' ? 'Not logged in' : 'No data yet';
+    }
     return;
   }
 
@@ -232,8 +312,9 @@ async function renderDashboard() {
   for (const b of document.querySelectorAll('#chartSeries button')) b.classList.toggle('active', b.dataset.series === ui.chartSeries);
   for (const n of document.querySelectorAll('.periodName')) n.textContent = PERIOD_NAMES[ui.period];
 
-  const d = await loadPeriod(a.userId, ui.period, { series: ui.chartSeries });
-  renderPanels(d);
+  const d = await loadPeriod(e, ui.period, { series: ui.chartSeries });
+  if (currentEntity()?.key !== e.key) return; // switched while loading
+  renderPanels(d, e);
 
   if (ui.full) {
     chartData = d.chart;
@@ -245,17 +326,17 @@ async function renderDashboard() {
     renderRecent(d.txs);
   }
 
-  $('dbInfo').textContent = `${nf.format(await DB.count(a.userId))} transactions stored locally.`;
+  $('dbInfo').textContent = `${nf.format(await DB.count(e.ownerId))} transactions stored locally for ${e.name}.`;
 }
 
 /** Hero cards + tiles – shared by the popup and the full view. */
-function renderPanels(d) {
+function renderPanels(d, e) {
   const { m, prev } = d;
 
   // Balance change over the period (like a stock's change for the selected range)
   const bc = d.balance.candles;
-  const balStart = bc.length ? bc[0].open : ui.account.robux;
-  setChange($('balChange'), ui.account.robux - balStart, balStart);
+  const balStart = bc.length ? bc[0].open : e.robux;
+  setChange($('balChange'), e.robux - balStart, balStart);
 
   setSigned($('kPnl'), m.netPnl, robux(m.netPnl, { sign: true }));
   $('pnlCard').classList.toggle('negative', m.netPnl < 0);
@@ -342,7 +423,7 @@ function renderRecent(txs) {
   if (!recent.length) return emptyRow(list, 'No transactions in this period');
   for (const t of recent) {
     const delta = PnL.balanceDelta({ ...t, isPending: false });
-    const def = PnL.TYPES[t.type];
+    const def = PnL.defOf(t);
     const label = def?.label || t.type;
     const title = t.itemName || t.agentName || label;
     const when = new Date(t.created).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -361,45 +442,60 @@ function renderRecent(txs) {
 
 // ------------------------------------------------------------------ share card
 
-let avatarBitmap; // undefined = not loaded yet, null = unavailable
+const avatarBitmaps = new Map(); // image URL -> ImageBitmap | null
 let logoImage;
 
-async function loadShareAssets() {
-  if (avatarBitmap === undefined) {
+/** Avatar/group icon as a bitmap: fetched via host permission so the canvas stays exportable. */
+async function loadBitmap(url) {
+  if (!url) return null;
+  if (!avatarBitmaps.has(url)) {
     try {
-      const res = await fetch(ui.account.avatarUrl);
-      avatarBitmap = await createImageBitmap(await res.blob());
+      const res = await fetch(url);
+      avatarBitmaps.set(url, await createImageBitmap(await res.blob()));
     } catch {
-      avatarBitmap = null;
+      avatarBitmaps.set(url, null);
     }
   }
+  return avatarBitmaps.get(url);
+}
+
+async function loadLogo() {
   if (!logoImage) {
     logoImage = new Image();
     logoImage.src = 'icons/icon128.png';
     await logoImage.decode().catch(() => {});
   }
   await document.fonts.ready;
+  return logoImage;
 }
 
 async function drawShare() {
-  const a = ui.account;
+  const e = currentEntity();
+  if (!e?.access) return;
   for (const b of document.querySelectorAll('#sharePeriods button')) b.classList.toggle('active', b.dataset.period === ui.sharePeriod);
-  const [{ win, m, series }] = await Promise.all([loadPeriod(a.userId, ui.sharePeriod), loadShareAssets()]);
+  const [{ win, m, series }, avatar, logo] = await Promise.all([loadPeriod(e, ui.sharePeriod), loadBitmap(e.iconUrl), loadLogo()]);
   const fmtDate = (ts) => new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   ShareCard.render($('shareCanvas'), {
-    displayName: a.displayName,
-    username: a.name,
-    avatar: avatarBitmap,
-    logo: logoImage,
+    displayName: e.name,
+    handle: e.kind === 'group' ? 'Roblox group' : e.handle,
+    avatar,
+    squareAvatar: e.kind === 'group',
+    logo,
     periodName: PERIOD_NAMES[ui.sharePeriod],
     rangeText: `${fmtDate(win.from)} – ${fmtDate(Math.min(win.to, Date.now()))}`,
     metrics: m,
     cumulative: series.cumulative,
-    balance: a.robux,
+    balance: e.robux,
+    balanceLabel: e.kind === 'group' ? 'Group funds' : 'Balance',
     showBalance: $('shareBalance').checked,
     robux,
     money
   });
+}
+
+/** File-name friendly name of the shown entity. */
+function entitySlug() {
+  return (currentEntity()?.name || 'account').replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
 }
 
 function shareBlob() {
@@ -407,7 +503,7 @@ function shareBlob() {
 }
 
 async function openShare() {
-  if (!ui.account) return;
+  if (!currentEntity()?.access) return;
   ui.sharePeriod = ui.period;
   $('shareHint').textContent = '';
   $('shareModal').hidden = false;
@@ -471,8 +567,9 @@ async function saveSettings() {
 }
 
 async function exportCsv() {
-  if (!ui.account) return;
-  const rows = await DB.getAll(ui.account.userId);
+  const e = currentEntity();
+  if (!e?.access) return;
+  const rows = await DB.getAll(e.ownerId);
   const cols = ['created', 'type', 'apiType', 'amount', 'currency', 'isPending', 'itemName', 'itemType', 'itemId', 'agentName', 'agentType', 'agentId', 'placeName', 'key'];
   const esc = (v) => {
     const s = v == null ? '' : String(v);
@@ -483,7 +580,7 @@ async function exportCsv() {
     lines.push(cols.map((c) => esc(c === 'created' ? new Date(r.created).toISOString() : r[c])).join(','));
   }
   download(new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' }),
-    `robux-transactions-${ui.account.name}-${new Date().toISOString().slice(0, 10)}.csv`);
+    `robux-transactions-${entitySlug()}-${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
 function download(blob, filename) {
@@ -493,9 +590,10 @@ function download(blob, filename) {
 }
 
 async function clearData() {
-  if (!ui.account) return;
-  if (!confirm('Delete all locally stored transactions for this account? The next sync will read the history again.')) return;
-  const res = await chrome.runtime.sendMessage({ type: 'RESET_DATA', userId: ui.account.userId });
+  const e = currentEntity();
+  if (!e) return;
+  if (!confirm(`Delete all locally stored transactions for ${e.name}? The next sync will read the history again.`)) return;
+  const res = await chrome.runtime.sendMessage({ type: 'RESET_DATA', ownerId: e.ownerId });
   if (!res?.ok) alert(res?.error || 'Delete failed');
   scheduleRender();
 }
@@ -538,9 +636,18 @@ function bindEvents() {
   $('btnTab').addEventListener('click', openFullDashboard);
   $('btnViewChart').addEventListener('click', openFullDashboard);
   $('btnSettings').addEventListener('click', openDrawer);
+  $('entityBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleEntityMenu(); });
+  document.addEventListener('click', (e) => { if (!e.target.closest('.switcher')) toggleEntityMenu(false); });
   $('btnCloseSettings').addEventListener('click', closeOverlays);
   $('backdrop').addEventListener('click', closeOverlays);
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOverlays(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const somethingOpen = !$('entityMenu').hidden || !$('shareModal').hidden || $('drawer').classList.contains('open');
+    toggleEntityMenu(false);
+    closeOverlays();
+    // Embedded on roblox.com: a second Esc closes the dropdown itself.
+    if (ui.embed && !somethingOpen) parent.postMessage({ type: 'rpl-close' }, '*');
+  });
   $('btnExport').addEventListener('click', () => exportCsv().catch((e) => alert(e.message)));
   $('btnClear').addEventListener('click', () => clearData().catch((e) => alert(e.message)));
   for (const id of ['sDevexRate', 'sFee', 'sCurrency', 'sEur', 'sFxLive']) $(id).addEventListener('change', saveSettings);
@@ -554,7 +661,7 @@ function bindEvents() {
   });
   $('shareBalance').addEventListener('change', () => drawShare().catch(console.error));
   $('btnDownloadPng').addEventListener('click', async () => {
-    download(await shareBlob(), `robux-pnl-${ui.account.name}-${ui.sharePeriod.toLowerCase()}.png`);
+    download(await shareBlob(), `robux-pnl-${entitySlug()}-${ui.sharePeriod.toLowerCase()}.png`);
   });
   $('btnCopyPng').addEventListener('click', async () => {
     try {
@@ -569,7 +676,12 @@ function bindEvents() {
     if (area !== 'local') return;
     if (changes.account) {
       ui.account = changes.account.newValue || null;
-      avatarBitmap = undefined;
+      renderAccount();
+      scheduleRender();
+    }
+    if (changes.groups) {
+      ui.groups = changes.groups.newValue || [];
+      if (ui.entity !== 'me' && !ui.groups.some((g) => g.groupId === ui.entity)) ui.entity = 'me';
       renderAccount();
       scheduleRender();
     }
@@ -597,12 +709,22 @@ function bindEvents() {
 }
 
 async function init() {
-  ui.full = new URLSearchParams(location.search).get('view') === 'tab';
+  const params = new URLSearchParams(location.search);
+  ui.full = params.get('view') === 'tab';
+  ui.embed = params.get('embed') === '1';
   document.body.classList.toggle('full', ui.full);
+  document.body.classList.toggle('embed', ui.embed);
+  if (ui.embed) {
+    // Dropdown on roblox.com (content.js): tell it our height so it fits the content.
+    ui.reportSize = () => parent.postMessage({ type: 'rpl-size', height: document.body.getBoundingClientRect().height }, '*');
+    new ResizeObserver(ui.reportSize).observe(document.body);
+  }
 
-  const stored = await chrome.storage.local.get(['settings', 'account', 'syncState', 'period', 'fx', 'apiPacing', 'chartType', 'chartSeries']);
+  const stored = await chrome.storage.local.get(['settings', 'account', 'groups', 'entity', 'syncState', 'period', 'fx', 'apiPacing', 'chartType', 'chartSeries']);
   ui.settings = { ...PnL.DEFAULT_SETTINGS, ...stored.settings };
   ui.account = stored.account || null;
+  ui.groups = stored.groups || [];
+  if (stored.entity === 'me' || ui.groups.some((g) => g.groupId === stored.entity)) ui.entity = stored.entity ?? 'me';
   ui.syncState = stored.syncState || null;
   ui.fx = stored.fx || null;
   ui.pacing = stored.apiPacing || null;
@@ -615,6 +737,7 @@ async function init() {
   renderAccount();
   renderSync();
   await renderDashboard();
+  ui.reportSize?.(); // don't wait for the first ResizeObserver tick
 
   // Opening the dashboard pulls fresh data (the worker skips it if the last sync was recent).
   chrome.runtime.sendMessage({ type: 'SYNC', mode: 'auto' });
