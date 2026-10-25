@@ -1,0 +1,22 @@
+# Release build output (scripts/package.ps1 – releases are built by GitHub Actions)
+dist/
+
+# Private keys and packed extensions – NEVER commit these.
+# A .pem from Chrome's "Pack extension" is a private key; anyone holding it can sign builds as this extension.
+*.pem
+*.crx
+*.zip
+
+# Dependencies / tooling
+node_modules/
+*.log
+
+# Local editor and assistant settings
+.vscode/
+.idea/
+.claude/settings.local.json
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
