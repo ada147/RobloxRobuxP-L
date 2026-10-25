@@ -3,9 +3,10 @@
   "name": "Robux P&L Dashboard",
   "short_name": "Robux P&L",
   "version": "1.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAt/o2bKkBwwM0b06yQP90E5S9jgWB2PiMUKdIEcf+EIKnhp1HjPLYoyq+dWFhY6QjILHwl6xsSBH13NTQQ2IZMjrDXQpdbA3DAKC7L7YxQVUyAC34HTor7Ndoxxxh6dWk6sJi1BSBUZJekBhn7nykpXvTN+C9nb83poM3uC6P5W7cSerGyEPaFpZpx1RORX0cubP57ItsCekirFjlP6T1GwJcKMcM02IB9vXqYciwsposMpnk5TdTqW8JplUcQL7J+7bUipj91j8xJUDuECGu62rBsa4PeLYqLm4o04JP7DmhzRmvAyF38vkHWVJmEfHJZ1B7bhBetUqTorKmWinUZQIDAQAB",
   "description": "Personal profit & loss statement and Robux balance dashboard built from your Roblox transaction history.",
   "permissions": ["storage", "alarms", "unlimitedStorage"],
-  "host_permissions": ["https://*.roblox.com/*", "https://*.rbxcdn.com/*", "https://api.frankfurter.dev/*"],
+  "host_permissions": ["https://*.roblox.com/*", "https://*.rbxcdn.com/*", "https://api.frankfurter.dev/*", "https://api.github.com/*"],
   "homepage_url": "https://github.com/alphabjarnegit/RobloxRobuxP-L",
   "background": {
     "service_worker": "background.js"

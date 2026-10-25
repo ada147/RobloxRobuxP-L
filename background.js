@@ -21,6 +21,9 @@ const AUTO_MIN_GAP_MS = 10 * 60 * 1000;
 const RATE_LIMIT_PAUSE_MINUTES = 5;
 const FX_URL = 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR'; // ECB reference rates, no key
 const FX_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+// Distributed via GitHub releases (no web store), so the extension checks for new versions itself.
+const RELEASES_URL = 'https://api.github.com/repos/alphabjarnegit/RobloxRobuxP-L/releases/latest';
+const UPDATE_CHECK_MS = 24 * 60 * 60 * 1000;
 
 let activeSync = null;
 let state = null;
@@ -50,7 +53,12 @@ function scheduleAlarm() {
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: AUTO_SYNC_MINUTES, delayInMinutes: 1 });
 }
 
-chrome.runtime.onInstalled.addListener(() => { scheduleAlarm(); runSync('auto'); });
+chrome.runtime.onInstalled.addListener(() => {
+  scheduleAlarm();
+  // A freshly installed version may be the one we flagged – re-check right away.
+  checkForUpdate(true);
+  runSync('auto');
+});
 chrome.runtime.onStartup.addListener(() => { scheduleAlarm(); runSync('auto'); });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) runSync('auto');
@@ -67,6 +75,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     chrome.tabs.create({ url: chrome.runtime.getURL('popup.html?view=tab') });
     sendResponse({ ok: true });
     return;
+  }
+  if (msg?.type === 'CHECK_UPDATE') {
+    checkForUpdate(true).then(() => sendResponse({ ok: true }));
+    return true; // async response
   }
   if (msg?.type === 'QUICK_PNL') {
     quickPnl().then(sendResponse, () => sendResponse(null));
@@ -99,8 +111,38 @@ async function refreshFx() {
   }
 }
 
+/** "1.10.0" > "1.9.2" – compares dotted version numbers, ignoring a leading "v". */
+function isNewer(latest, current) {
+  const a = String(latest).replace(/^v/i, '').split('.').map(Number);
+  const b = String(current).split('.').map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  }
+  return false;
+}
+
+/** Stores { latest, url, available } in storage.update once a day (public GitHub API, no personal data). */
+async function checkForUpdate(force = false) {
+  const { update } = await chrome.storage.local.get('update');
+  if (!force && update && Date.now() - update.checkedAt < UPDATE_CHECK_MS) return;
+  const current = chrome.runtime.getManifest().version;
+  try {
+    const res = await fetch(RELEASES_URL, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`); // 404 until the first release exists
+    const json = await res.json();
+    const latest = String(json.tag_name || '').replace(/^v/i, '');
+    await chrome.storage.local.set({
+      update: { latest, current, url: json.html_url, available: isNewer(latest, current), checkedAt: Date.now() }
+    });
+  } catch (err) {
+    console.warn('[Robux P&L] Update check failed', err);
+    await chrome.storage.local.set({ update: { ...(update || {}), current, available: false, checkedAt: Date.now() } });
+  }
+}
+
 async function runSync(mode) {
   refreshFx();
+  checkForUpdate();
   if (activeSync) return activeSync;
   if (mode === 'auto') {
     const s = await loadState();

@@ -20,7 +20,7 @@ While you're on roblox.com, a white line icon (in the style of Roblox's own navb
 
 | File | Purpose |
 |---|---|
-| `manifest.json` | MV3 config (`storage`, `alarms`, `unlimitedStorage`, host access to `*.roblox.com`, `*.rbxcdn.com` for the avatar on share images, `api.frankfurter.dev` for the exchange rate) |
+| `manifest.json` | MV3 config (`storage`, `alarms`, `unlimitedStorage`, host access to `*.roblox.com`, `*.rbxcdn.com` for the avatar on share images, `api.frankfurter.dev` for the exchange rate, `api.github.com` for the update check); fixed `key` so the extension ID never changes |
 | `db.js` | Dexie schema (`transactions`, `syncMeta`) and DB helpers |
 | `api.js` | Roblox API client with a self-learning rate limiter (see *Rate limits*) |
 | `pnl.js` | P&L engine: classification, periods, metrics, chart series |
@@ -45,15 +45,37 @@ The chart treats your Robux balance like a stock:
 
 Balance candles are reconstructed backwards from the live balance (settled transactions only); the last P&L candle always equals the period's net P&L.
 
-## Install (unpacked extension)
+## Install
 
-1. Open Chrome → `chrome://extensions`
-2. Turn on **Developer mode** (top right)
-3. Click **Load unpacked** → select this folder (`RobloxP&L`)
-4. Pin the extension via the puzzle icon in the toolbar
-5. Log in on **roblox.com**, then open the popup – the first deep scan starts automatically
+The extension isn't on the Chrome Web Store – you install the latest release from GitHub yourself:
+
+1. Download the newest `robux-pnl-vX.Y.Z.zip` from **[Releases](https://github.com/alphabjarnegit/RobloxRobuxP-L/releases/latest)**.
+2. Unzip it into a folder you'll keep, e.g. `Documents\RobuxPnL` (Chrome loads the extension from there – don't delete it).
+3. Open `chrome://extensions` and turn on **Developer mode** (top right).
+4. Click **Load unpacked** and select that folder.
+5. Pin the extension via the puzzle icon, log in on **roblox.com** and open it – the first deep scan starts automatically.
+
+## Update
+
+When a new version is out, the popup shows an amber **Update** badge next to the sync status (the extension checks GitHub once a day; *Settings → Check for updates* checks right away).
+
+1. Click the badge (or go to Releases) and download the new ZIP.
+2. Unzip it **into the same folder** and replace the old files.
+3. Click ↻ (reload) on the extension's card in `chrome://extensions`.
+
+Your synced data stays: the manifest contains a fixed `key`, so the extension always has the same ID (`bmgpbppfnpoiidfbeibjmnmpcgjgfhjh`), no matter which folder it's loaded from. Don't click **Remove** on the extension card – that deletes the locally stored transactions (they'd be re-synced from Roblox, which takes a while).
+
+## Development
 
 After code changes, click ↻ (reload) on the extension's card in `chrome://extensions`. Service worker logs: click **Service worker** on the card → DevTools console. Popup logs: right-click inside the popup → **Inspect**.
+
+### Releasing a new version
+
+1. Bump `"version"` in `manifest.json` (e.g. `1.1.0`).
+2. Commit, then tag and push: `git tag v1.1.0` and `git push origin v1.1.0`.
+3. The **Release** workflow (`.github/workflows/release.yml`) checks that the tag matches the manifest, builds `robux-pnl-v1.1.0.zip` and publishes a GitHub release with it. Installed extensions show the update badge within a day.
+
+To build the same ZIP locally (e.g. to attach it to a release by hand): `scripts\package.ps1` → `dist\robux-pnl-v<version>.zip`.
 
 ## How sync works
 
@@ -89,4 +111,12 @@ The image button opens a share dialog: pick the period below the preview, option
 - Robux purchases, Premium stipends and DevEx cash-outs are tracked separately and don't affect P&L.
 - The **balance history** is estimated backwards from the live balance and the stored transactions.
 
-All data stays in your browser. The extension only uses your existing roblox.com session; the only non-Roblox request is fetching the public USD→EUR rate, which contains no personal data.
+All data stays in your browser. The extension only uses your existing roblox.com session. The only non-Roblox requests are the public USD→EUR rate (frankfurter.dev) and the latest-release check (GitHub API) – neither contains personal data.
+
+## License
+
+Copyright (C) 2026 alphabjarnegit
+
+Robux P&L is free software: you can redistribute it and/or modify it under the terms of the **GNU General Public License v3.0** as published by the Free Software Foundation. Forks and modified versions must stay open source under the same license. It comes **without any warranty** – see [`LICENSE`](LICENSE) for the full text.
+
+Bundled third-party components (Dexie.js, TradingView Lightweight Charts™ – both Apache 2.0 – and Feather icons, MIT) keep their own licenses; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

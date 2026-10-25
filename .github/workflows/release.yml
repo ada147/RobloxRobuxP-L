@@ -1,0 +1,42 @@
+# Builds the extension ZIP and publishes a GitHub release when a version tag is pushed:
+#   1. bump "version" in manifest.json (e.g. 1.1.0)
+#   2. git tag v1.1.0 && git push origin v1.1.0
+# Users download the ZIP from the release and load it as an unpacked extension;
+# the extension's update check points them at the newest release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check that manifest.json matches the tag
+        run: |
+          version=$(jq -r .version manifest.json)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::manifest.json version is $version but the tag is $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      - name: Build extension ZIP
+        run: |
+          mkdir -p dist
+          zip -r "dist/robux-pnl-$GITHUB_REF_NAME.zip" \
+            manifest.json background.js api.js db.js pnl.js popup.html popup.css popup.js \
+            share.js pricechart.js content.js content.css lib icons README.md \
+            LICENSE THIRD_PARTY_NOTICES.md licenses \
+            -x 'icons/icon512.png'
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true

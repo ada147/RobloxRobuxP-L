@@ -13,6 +13,7 @@ const ui = {
   settings: { ...PnL.DEFAULT_SETTINGS },
   fx: null,
   pacing: null,
+  update: null,           // { latest, url, available } from the GitHub release check
   account: null,
   groups: [],             // groups the user owns (from the worker)
   entity: 'me',           // 'me' or a groupId – whose dashboard is shown
@@ -526,6 +527,22 @@ function openDrawer() {
   $('backdrop').hidden = false;
 }
 
+/** "Update" pill + version line – the extension is installed from GitHub releases, not a store. */
+function renderUpdate() {
+  const u = ui.update;
+  const current = chrome.runtime.getManifest?.().version || '?';
+  const available = Boolean(u?.available && u.url);
+  $('updatePill').hidden = !available;
+  if (available) {
+    $('updatePill').href = u.url;
+    $('updateText').textContent = `Update v${u.latest}`;
+  }
+  const checked = u?.checkedAt ? ` · checked ${relativeTime(u.checkedAt)}` : '';
+  $('versionInfo').textContent = available
+    ? `Installed v${current} – v${u.latest} is available on GitHub. Download it, replace the files in your extension folder and click ↻ on chrome://extensions.`
+    : `Installed v${current}${u?.latest ? ' – up to date' : ''}${checked}.`;
+}
+
 function renderSettingsInfo() {
   const live = ui.settings.fxLive && ui.fx?.usdToEur;
   $('sEur').disabled = Boolean(live);
@@ -636,6 +653,10 @@ function bindEvents() {
   $('btnTab').addEventListener('click', openFullDashboard);
   $('btnViewChart').addEventListener('click', openFullDashboard);
   $('btnSettings').addEventListener('click', openDrawer);
+  $('btnCheckUpdate').addEventListener('click', async () => {
+    $('versionInfo').textContent = 'Checking GitHub…';
+    await chrome.runtime.sendMessage({ type: 'CHECK_UPDATE' });
+  });
   $('entityBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleEntityMenu(); });
   document.addEventListener('click', (e) => { if (!e.target.closest('.switcher')) toggleEntityMenu(false); });
   $('btnCloseSettings').addEventListener('click', closeOverlays);
@@ -695,6 +716,10 @@ function bindEvents() {
       ui.pacing = changes.apiPacing.newValue || null;
       renderSettingsInfo();
     }
+    if (changes.update) {
+      ui.update = changes.update.newValue || null;
+      renderUpdate();
+    }
     if (changes.syncState) {
       const prev = changes.syncState.oldValue;
       ui.syncState = changes.syncState.newValue || null;
@@ -720,7 +745,7 @@ async function init() {
     new ResizeObserver(ui.reportSize).observe(document.body);
   }
 
-  const stored = await chrome.storage.local.get(['settings', 'account', 'groups', 'entity', 'syncState', 'period', 'fx', 'apiPacing', 'chartType', 'chartSeries']);
+  const stored = await chrome.storage.local.get(['settings', 'account', 'groups', 'entity', 'syncState', 'period', 'fx', 'apiPacing', 'update', 'chartType', 'chartSeries']);
   ui.settings = { ...PnL.DEFAULT_SETTINGS, ...stored.settings };
   ui.account = stored.account || null;
   ui.groups = stored.groups || [];
@@ -728,11 +753,13 @@ async function init() {
   ui.syncState = stored.syncState || null;
   ui.fx = stored.fx || null;
   ui.pacing = stored.apiPacing || null;
+  ui.update = stored.update || null;
   if (PnL.PERIODS.includes(stored.period)) ui.period = stored.period;
   if (['candles', 'line', 'area'].includes(stored.chartType)) ui.chartType = stored.chartType;
   if (['balance', 'pnl'].includes(stored.chartSeries)) ui.chartSeries = stored.chartSeries;
 
   fillSettingsForm();
+  renderUpdate();
   bindEvents();
   renderAccount();
   renderSync();
