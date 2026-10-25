@@ -1,11 +1,13 @@
-/* global Chart, DB, PnL, ShareCard */
+/* global DB, PnL, PriceChart, ShareCard */
 // Dashboard UI. Reads transactions straight from IndexedDB (same origin as the
 // service worker), and follows sync progress through chrome.storage.
-// The popup shows the essentials; ?view=tab is the full, wide dashboard.
+// The popup shows the essentials; ?view=tab is the full view with the trading chart.
 
 const ui = {
   period: '7D',
   sharePeriod: '7D',
+  chartType: 'candles',   // candles | line | area (full view)
+  chartSeries: 'balance', // balance | pnl (full view)
   full: false,
   settings: { ...PnL.DEFAULT_SETTINGS },
   fx: null,
@@ -15,13 +17,13 @@ const ui = {
 };
 
 const PERIOD_NAMES = { '1D': 'Last 24 hours', '7D': 'Last 7 days', '1M': 'Last 30 days', '1Y': 'Last 12 months', ALL: 'All time' };
-const COLORS = { green: '#2dd4a7', red: '#ff6b7d', accent: '#8b8bff', muted: '#8a8a94', grid: 'rgba(255,255,255,0.05)' };
+const SERIES_NAMES = { balance: 'Robux balance', pnl: 'Cumulative net P&L' };
 
 const $ = (id) => document.getElementById(id);
 const nf = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 
-let flowChart = null;
-let balanceChart = null;
+let mainChart = null;   // full view only
+let chartData = null;   // { candles, volume, interval } currently shown
 let renderTimer = null;
 let lastRenderAt = 0;
 
@@ -31,6 +33,17 @@ function robux(n, { sign = false } = {}) {
   const v = Math.round(n);
   const prefix = v < 0 ? '−' : sign && v > 0 ? '+' : '';
   return `${prefix}R$ ${nf.format(Math.abs(v))}`;
+}
+
+function num(n, { sign = false } = {}) {
+  const v = Math.round(n);
+  return `${v < 0 ? '−' : sign && v > 0 ? '+' : ''}${nf.format(Math.abs(v))}`;
+}
+
+function pct(change, base) {
+  if (!base) return '';
+  const p = (change / Math.abs(base)) * 100;
+  return `${p >= 0 ? '+' : '−'}${Math.abs(p).toFixed(2)}%`;
 }
 
 /** Settings with the live exchange rate applied when enabled. */
@@ -70,7 +83,13 @@ function setSigned(node, value, text) {
   node.classList.toggle('neg', value < 0);
 }
 
-/** "▲ 12% vs prev." – for costs (invert) a rise is shown in red. */
+function setChange(node, change, base) {
+  node.textContent = `${num(change, { sign: true })}${base ? ` (${pct(change, base)})` : ''}`;
+  node.classList.toggle('up', change > 0);
+  node.classList.toggle('down', change < 0);
+}
+
+/** "▲ 12% vs previous" – for costs (invert) a rise is shown in red. */
 function setDelta(node, cur, prev, { invert = false } = {}) {
   node.replaceChildren();
   if (prev == null) return;
@@ -78,13 +97,12 @@ function setDelta(node, cur, prev, { invert = false } = {}) {
   if (prev === 0 && cur === 0) { text = 'no change'; up = null; }
   else if (prev === 0) { text = 'new'; up = cur > 0; }
   else {
-    const pct = ((cur - prev) / Math.abs(prev)) * 100;
-    up = pct >= 0;
-    text = `${up ? '▲' : '▼'} ${Math.abs(pct) >= 1000 ? '999+' : Math.round(Math.abs(pct))}%`;
+    const p = ((cur - prev) / Math.abs(prev)) * 100;
+    up = p >= 0;
+    text = `${up ? '▲' : '▼'} ${Math.abs(p) >= 1000 ? '999+' : Math.round(Math.abs(p))}%`;
   }
   const good = up == null ? null : invert ? !up : up;
-  const span = el('span', { className: `delta ${good == null ? '' : good ? 'up' : 'down'}`, textContent: text });
-  node.append(span, ' vs previous');
+  node.append(el('span', { className: `delta ${good == null ? '' : good ? 'up' : 'down'}`, textContent: text }), ' vs previous');
 }
 
 // ------------------------------------------------------------------ header & sync
@@ -133,21 +151,71 @@ function renderSync() {
   $('syncProgress').style.width = `${Math.round(Math.max(frac, 0.03) * 100)}%`;
 }
 
-// ------------------------------------------------------------------ dashboard
+// ------------------------------------------------------------------ data
 
-/** Metrics + chart series for a period; also the previous period of equal length. */
-async function loadPeriod(userId, period) {
+/** Metrics for a period (+ the previous period of equal length) and the candle data. */
+async function loadPeriod(userId, period, { series = 'balance' } = {}) {
+  const now = Date.now();
   const firstTs = await DB.getFirstTimestamp(userId);
-  const win = PnL.periodWindow(period, Date.now(), firstTs);
+  const win = PnL.periodWindow(period, now, firstTs);
+  const cw = PnL.candleWindow(period, now, firstTs);
+  const settings = calcSettings();
+
   const txs = await DB.getRange(userId, win.from, win.to);
-  const m = PnL.summarize(txs, calcSettings());
+  const m = PnL.summarize(txs, settings);
   let prev = null;
   if (period !== 'ALL') {
     const len = win.to - win.from + 1;
-    prev = PnL.summarize(await DB.getRange(userId, win.from - len, win.from - 1), calcSettings());
+    prev = PnL.summarize(await DB.getRange(userId, win.from - len, win.from - 1), settings);
   }
-  return { win, txs, m, prev, series: PnL.series(txs, win.buckets, ui.account.robux) };
+
+  // Balance candles are anchored at the live balance, so they need everything up to now.
+  const candleTxs = await DB.getRange(userId, cw.from, now + 864e5);
+  const balanceCandles = PnL.ohlc(candleTxs, cw.buckets, { mode: 'balance', currentBalance: ui.account.robux });
+  const chosen = series === 'pnl' ? PnL.ohlc(candleTxs, cw.buckets, { mode: 'pnl' }) : balanceCandles;
+  return {
+    win, txs, m, prev,
+    series: PnL.series(txs, win.buckets, ui.account.robux),
+    balance: balanceCandles,
+    chart: { ...chosen, interval: cw.interval, intraday: cw.intraday }
+  };
 }
+
+// ------------------------------------------------------------------ chart legend
+
+function renderLegend(node, data, index, { title }) {
+  node.replaceChildren();
+  if (!data?.candles.length) return;
+  const i = index ?? data.candles.length - 1;
+  const c = data.candles[i];
+  const change = c.close - c.open;
+  const dir = change > 0 ? 'up' : change < 0 ? 'down' : '';
+  const when = new Date(c.time).toLocaleString('en-US', data.intraday
+    ? { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }
+    : { month: 'short', day: 'numeric', year: 'numeric' });
+
+  node.append(el('div', { className: 'lg-title' }, [
+    title, el('span', { textContent: ` · ${data.interval} · ${index == null ? 'latest' : when}` })
+  ]));
+  const ohlc = el('div', { className: 'lg-ohlc' });
+  for (const [k, v] of [['O', c.open], ['H', c.high], ['L', c.low], ['C', c.close]]) {
+    ohlc.append(k, el('b', { className: dir, textContent: num(v) }));
+  }
+  ohlc.append(el('span', { className: `lg-chg ${dir}`, textContent: `${num(change, { sign: true })} (${pct(change, c.open) || '0.00%'})` }));
+  node.append(ohlc);
+  node.append(el('div', { className: 'lg-vol' }, ['Vol ', el('b', { textContent: num(data.volume[i].value) })]));
+}
+
+function ensureChart() {
+  if (mainChart) return;
+  mainChart = PriceChart.create($('mainChart'), {
+    formatPrice: (p) => nf.format(p),
+    formatValue: (v) => robux(v),
+    onHover: (i) => renderLegend($('mainLegend'), chartData, i, { title: SERIES_NAMES[ui.chartSeries] })
+  });
+}
+
+// ------------------------------------------------------------------ dashboard
 
 async function renderDashboard() {
   lastRenderAt = Date.now();
@@ -160,13 +228,35 @@ async function renderDashboard() {
   }
 
   for (const b of document.querySelectorAll('#periods button')) b.classList.toggle('active', b.dataset.period === ui.period);
+  for (const b of document.querySelectorAll('#chartTypes button')) b.classList.toggle('active', b.dataset.type === ui.chartType);
+  for (const b of document.querySelectorAll('#chartSeries button')) b.classList.toggle('active', b.dataset.series === ui.chartSeries);
   for (const n of document.querySelectorAll('.periodName')) n.textContent = PERIOD_NAMES[ui.period];
 
-  const { txs, m, prev, series } = await loadPeriod(a.userId, ui.period);
+  const d = await loadPeriod(a.userId, ui.period, { series: ui.chartSeries });
+  renderPanels(d);
 
-  $('txCount').textContent = `${nf.format(txs.length)} transactions`;
+  if (ui.full) {
+    chartData = d.chart;
+    ensureChart();
+    mainChart.setData(d.chart, { type: ui.chartType, intraday: d.chart.intraday });
+    renderLegend($('mainLegend'), d.chart, null, { title: SERIES_NAMES[ui.chartSeries] });
+    renderBreakdown(d.txs);
+    renderTopItems(d.txs);
+    renderRecent(d.txs);
+  }
 
-  // Net P&L hero
+  $('dbInfo').textContent = `${nf.format(await DB.count(a.userId))} transactions stored locally.`;
+}
+
+/** Hero cards + tiles – shared by the popup and the full view. */
+function renderPanels(d) {
+  const { m, prev } = d;
+
+  // Balance change over the period (like a stock's change for the selected range)
+  const bc = d.balance.candles;
+  const balStart = bc.length ? bc[0].open : ui.account.robux;
+  setChange($('balChange'), ui.account.robux - balStart, balStart);
+
   setSigned($('kPnl'), m.netPnl, robux(m.netPnl, { sign: true }));
   $('pnlCard').classList.toggle('negative', m.netPnl < 0);
   $('kDevex').textContent = `≈ ${money(m.devexUsd)} DevEx value`;
@@ -177,7 +267,6 @@ async function renderDashboard() {
   $('splitEarned').style.width = flow ? `${(m.netProfit / flow) * 100}%` : '0';
   $('splitSpent').style.width = flow ? `${(m.totalSpent / flow) * 100}%` : '0';
 
-  // Tiles
   $('kGross').textContent = robux(m.grossRevenue);
   setDelta($('kGrossDelta'), m.grossRevenue, prev?.grossRevenue);
   $('kNet').textContent = robux(m.netProfit);
@@ -190,16 +279,6 @@ async function renderDashboard() {
   for (const id of ['kGrossDelta', 'kNetDelta', 'kSpentDelta']) {
     if (!$(id).textContent) $(id).textContent = ui.period === 'ALL' ? 'since your first transaction' : '';
   }
-
-  renderFlowChart(series);
-  renderBalanceChart(series);
-  if (ui.full) {
-    renderBreakdown(txs);
-    renderTopItems(txs);
-    renderRecent(txs);
-  }
-
-  $('dbInfo').textContent = `${nf.format(await DB.count(a.userId))} transactions stored locally.`;
 }
 
 function scheduleRender(delay = 0) {
@@ -207,122 +286,7 @@ function scheduleRender(delay = 0) {
   renderTimer = setTimeout(() => renderDashboard().catch(console.error), delay);
 }
 
-// ------------------------------------------------------------------ charts
-
-/** Dashed vertical guide at the hovered point (like a finance app crosshair). */
-const crosshair = {
-  id: 'crosshair',
-  afterDatasetsDraw(chart) {
-    const active = chart.tooltip?.getActiveElements?.() || [];
-    if (!active.length) return;
-    const { top, bottom } = chart.chartArea;
-    const x = active[0].element.x;
-    const ctx = chart.ctx;
-    ctx.save();
-    ctx.setLineDash([4, 4]);
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(x, top);
-    ctx.lineTo(x, bottom);
-    ctx.stroke();
-    ctx.restore();
-  }
-};
-
-function tooltipStyle() {
-  return {
-    backgroundColor: '#26262b',
-    borderColor: 'rgba(255,255,255,0.08)',
-    borderWidth: 1,
-    padding: 10,
-    cornerRadius: 10,
-    titleColor: '#f4f4f6',
-    bodyColor: '#c8c8d0',
-    boxPadding: 4,
-    usePointStyle: true,
-    callbacks: { label: (c) => ` ${c.dataset.label}: ${robux(c.raw)}` }
-  };
-}
-
-function verticalGradient(rgb, alpha) {
-  return (ctx) => {
-    const { chart } = ctx;
-    if (!chart.chartArea) return 'transparent';
-    const { top, bottom } = chart.chartArea;
-    const g = chart.ctx.createLinearGradient(0, top, 0, bottom);
-    g.addColorStop(0, `rgba(${rgb}, ${alpha})`);
-    g.addColorStop(1, `rgba(${rgb}, 0)`);
-    return g;
-  };
-}
-
-function renderFlowChart(s) {
-  const data = {
-    labels: s.labels,
-    datasets: [
-      {
-        type: 'line', label: 'Cumulative P&L', data: s.cumulative, borderColor: COLORS.accent, borderWidth: 2.5,
-        pointRadius: 0, pointHoverRadius: 5, pointHoverBorderWidth: 3, pointHoverBorderColor: '#fff',
-        pointHoverBackgroundColor: COLORS.accent, tension: 0.4, stack: 'line', order: 1,
-        fill: 'origin', backgroundColor: verticalGradient('108, 108, 255', 0.35)
-      },
-      { type: 'bar', label: 'Income', data: s.inflow, backgroundColor: 'rgba(45, 212, 167, 0.85)', borderRadius: 6, maxBarThickness: 22, stack: 'flow', order: 2 },
-      { type: 'bar', label: 'Spending', data: s.outflow.map((v) => -v), backgroundColor: 'rgba(255, 107, 125, 0.85)', borderRadius: 6, maxBarThickness: 22, stack: 'flow', order: 2 }
-    ]
-  };
-  if (flowChart) {
-    flowChart.data = data;
-    flowChart.update();
-    return;
-  }
-  flowChart = new Chart($('flowChart'), {
-    data,
-    plugins: [crosshair],
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: { duration: 300 },
-      interaction: { mode: 'index', intersect: false },
-      plugins: { legend: { display: false }, tooltip: tooltipStyle() },
-      scales: {
-        x: { stacked: true, grid: { display: false }, border: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: ui.full ? 14 : 8 } },
-        y: { stacked: true, grid: { color: COLORS.grid }, border: { display: false, dash: [4, 4] }, ticks: { maxTicksLimit: 5, callback: (v) => nf.format(v) } }
-      }
-    }
-  });
-}
-
-function renderBalanceChart(s) {
-  const data = {
-    labels: s.labels,
-    datasets: [{
-      label: 'Balance', data: s.balance || [], borderColor: COLORS.accent, borderWidth: 2,
-      pointRadius: 0, pointHoverRadius: 4, tension: 0.4, fill: 'start',
-      backgroundColor: verticalGradient('108, 108, 255', 0.3)
-    }]
-  };
-  if (balanceChart) {
-    balanceChart.data = data;
-    balanceChart.update();
-    return;
-  }
-  balanceChart = new Chart($('balanceChart'), {
-    type: 'line',
-    data,
-    plugins: [crosshair],
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: { duration: 300 },
-      interaction: { mode: 'index', intersect: false },
-      plugins: { legend: { display: false }, tooltip: tooltipStyle() },
-      scales: { x: { display: false }, y: { display: false, grace: '10%' } }
-    }
-  });
-}
-
-// ------------------------------------------------------------------ side lists (full view)
+// ------------------------------------------------------------------ side panels (full view)
 
 function emptyRow(list, text) {
   list.append(el('li', { className: 'empty-row', textContent: text }));
@@ -343,7 +307,7 @@ function renderBreakdown(txs) {
     amount.classList.toggle('neg', r.robux < 0);
     const fill = el('span');
     fill.style.width = `${(Math.abs(r.robux) / max) * 100}%`;
-    fill.style.background = r.robux >= 0 ? COLORS.green : COLORS.red;
+    fill.style.background = r.robux >= 0 ? PriceChart.UP : PriceChart.DOWN;
     body.append(el('tr', {}, [
       el('td', {}, [
         el('span', { className: 'type-name', textContent: r.label }),
@@ -374,7 +338,7 @@ function renderTopItems(txs) {
 function renderRecent(txs) {
   const list = $('recent');
   list.replaceChildren();
-  const recent = txs.slice(-7).reverse();
+  const recent = txs.slice(-8).reverse();
   if (!recent.length) return emptyRow(list, 'No transactions in this period');
   for (const t of recent) {
     const delta = PnL.balanceDelta({ ...t, isPending: false });
@@ -479,7 +443,7 @@ function renderSettingsInfo() {
 }
 
 function fillSettingsForm() {
-  $('sDevex').value = ui.settings.devexRate;
+  $('sDevexRate').value = ui.settings.devexRate;
   $('sFee').value = ui.settings.marketplaceFee;
   $('sCurrency').value = ui.settings.displayCurrency;
   $('sFxLive').checked = ui.settings.fxLive;
@@ -487,17 +451,17 @@ function fillSettingsForm() {
 }
 
 async function saveSettings() {
-  const num = (id, fallback) => {
+  const read = (id, fallback) => {
     const v = parseFloat($(id).value);
     return Number.isFinite(v) && v >= 0 ? v : fallback;
   };
   const fxLive = $('sFxLive').checked;
   ui.settings = {
-    devexRate: num('sDevex', PnL.DEFAULT_SETTINGS.devexRate),
-    marketplaceFee: Math.min(num('sFee', PnL.DEFAULT_SETTINGS.marketplaceFee), 99),
+    devexRate: read('sDevexRate', PnL.DEFAULT_SETTINGS.devexRate),
+    marketplaceFee: Math.min(read('sFee', PnL.DEFAULT_SETTINGS.marketplaceFee), 99),
     displayCurrency: $('sCurrency').value,
     // keep the manual rate untouched while the field shows the live one
-    usdToEur: fxLive && ui.fx?.usdToEur ? ui.settings.usdToEur : num('sEur', PnL.DEFAULT_SETTINGS.usdToEur),
+    usdToEur: fxLive && ui.fx?.usdToEur ? ui.settings.usdToEur : read('sEur', PnL.DEFAULT_SETTINGS.usdToEur),
     fxLive
   };
   await chrome.storage.local.set({ settings: ui.settings });
@@ -541,11 +505,26 @@ function openFullDashboard() {
 }
 
 function bindEvents() {
-  $('periods').addEventListener('click', async (e) => {
-    const p = e.target.closest('button')?.dataset.period;
-    if (!p) return;
+  const pick = (id, attr, fn) => $(id).addEventListener('click', (e) => {
+    const v = e.target.closest('button')?.dataset[attr];
+    if (v) fn(v);
+  });
+
+  pick('periods', 'period', (p) => {
     ui.period = p;
-    await chrome.storage.local.set({ period: p });
+    chrome.storage.local.set({ period: p });
+    scheduleRender();
+  });
+  pick('chartTypes', 'type', (t) => {
+    ui.chartType = t;
+    chrome.storage.local.set({ chartType: t });
+    for (const b of document.querySelectorAll('#chartTypes button')) b.classList.toggle('active', b.dataset.type === t);
+    mainChart?.setType(t);
+  });
+  $('btnResetView').addEventListener('click', () => mainChart?.resetView());
+  pick('chartSeries', 'series', (s) => {
+    ui.chartSeries = s;
+    chrome.storage.local.set({ chartSeries: s });
     scheduleRender();
   });
 
@@ -557,21 +536,19 @@ function bindEvents() {
     }
   });
   $('btnTab').addEventListener('click', openFullDashboard);
-  $('btnMore').addEventListener('click', openFullDashboard);
+  $('btnViewChart').addEventListener('click', openFullDashboard);
   $('btnSettings').addEventListener('click', openDrawer);
   $('btnCloseSettings').addEventListener('click', closeOverlays);
   $('backdrop').addEventListener('click', closeOverlays);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOverlays(); });
   $('btnExport').addEventListener('click', () => exportCsv().catch((e) => alert(e.message)));
   $('btnClear').addEventListener('click', () => clearData().catch((e) => alert(e.message)));
-  for (const id of ['sDevex', 'sFee', 'sCurrency', 'sEur', 'sFxLive']) $(id).addEventListener('change', saveSettings);
+  for (const id of ['sDevexRate', 'sFee', 'sCurrency', 'sEur', 'sFxLive']) $(id).addEventListener('change', saveSettings);
 
   // share dialog
   $('btnShare').addEventListener('click', () => openShare().catch(console.error));
   $('btnCloseShare').addEventListener('click', closeOverlays);
-  $('sharePeriods').addEventListener('click', (e) => {
-    const p = e.target.closest('button')?.dataset.period;
-    if (!p) return;
+  pick('sharePeriods', 'period', (p) => {
     ui.sharePeriod = p;
     drawShare().catch(console.error);
   });
@@ -623,18 +600,15 @@ async function init() {
   ui.full = new URLSearchParams(location.search).get('view') === 'tab';
   document.body.classList.toggle('full', ui.full);
 
-  Chart.defaults.color = COLORS.muted;
-  Chart.defaults.borderColor = COLORS.grid;
-  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
-  Chart.defaults.font.size = 11;
-
-  const stored = await chrome.storage.local.get(['settings', 'account', 'syncState', 'period', 'fx', 'apiPacing']);
+  const stored = await chrome.storage.local.get(['settings', 'account', 'syncState', 'period', 'fx', 'apiPacing', 'chartType', 'chartSeries']);
   ui.settings = { ...PnL.DEFAULT_SETTINGS, ...stored.settings };
   ui.account = stored.account || null;
   ui.syncState = stored.syncState || null;
   ui.fx = stored.fx || null;
   ui.pacing = stored.apiPacing || null;
   if (PnL.PERIODS.includes(stored.period)) ui.period = stored.period;
+  if (['candles', 'line', 'area'].includes(stored.chartType)) ui.chartType = stored.chartType;
+  if (['balance', 'pnl'].includes(stored.chartSeries)) ui.chartSeries = stored.chartSeries;
 
   fillSettingsForm();
   bindEvents();

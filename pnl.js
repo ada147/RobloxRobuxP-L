@@ -94,6 +94,27 @@ const PnL = (() => {
     return { unit, buckets, from: buckets[0].start, to: buckets[buckets.length - 1].end - 1 };
   }
 
+  /**
+   * Finer buckets for the price chart, so it reads like a stock chart:
+   * 1D = 1 h candles, 7D = 4 h, 1M = 1 day, 1Y = 1 week,
+   * ALL = 1 week (1 month once the history is longer than 3 years).
+   * Starts exactly where periodWindow() starts, so the chart's last
+   * cumulative P&L equals the period's net P&L.
+   */
+  function candleWindow(key, now = Date.now(), firstTs = null) {
+    const pw = periodWindow(key, now, firstTs);
+    const SPECS = { '1D': ['hour', 1, '1h'], '7D': ['hour', 4, '4h'], '1M': ['day', 1, '1D'], '1Y': ['day', 7, '1W'] };
+    const [unit, step, interval] = SPECS[key] || (now - pw.from > 3 * 365 * 864e5 ? ['month', 1, '1M'] : ['day', 7, '1W']);
+
+    const buckets = [];
+    for (let s = new Date(pw.from); s.getTime() <= pw.to;) {
+      const e = addUnit(s, unit, step);
+      buckets.push({ start: s.getTime(), end: e.getTime() });
+      s = e;
+    }
+    return { intraday: unit === 'hour', interval, buckets, from: pw.from, to: buckets[buckets.length - 1].end - 1 };
+  }
+
   function bucketIndex(buckets, ts) {
     let lo = 0, hi = buckets.length - 1;
     while (lo <= hi) {
@@ -198,6 +219,39 @@ const PnL = (() => {
     return { labels: buckets.map((b) => b.label), inflow, outflow, cumulative, balance };
   }
 
+  /**
+   * OHLC candles + volume per bucket.
+   * mode 'balance': walks the Robux balance, anchored at the live balance (settled transactions only);
+   * mode 'pnl':     cumulative net P&L, starting at 0.
+   * Volume = Robux moved in the bucket (income + spending).
+   */
+  function ohlc(txs, buckets, { mode = 'balance', currentBalance = 0 } = {}) {
+    const delta = mode === 'pnl'
+      ? (t) => { const c = classify(t); return c.earnTaxed + c.earnOther - c.spent; }
+      : balanceDelta;
+    const inRange = txs.filter((t) => t.created >= buckets[0].start).sort((a, b) => a.created - b.created);
+    let run = mode === 'pnl' ? 0 : currentBalance - inRange.reduce((sum, t) => sum + delta(t), 0);
+
+    const candles = [];
+    const volume = [];
+    let i = 0;
+    for (const b of buckets) {
+      const open = run;
+      let high = run, low = run, flow = 0;
+      for (; i < inRange.length && inRange[i].created < b.end; i++) {
+        const t = inRange[i];
+        run += delta(t);
+        if (run > high) high = run;
+        if (run < low) low = run;
+        const c = classify(t);
+        flow += c.earnTaxed + c.earnOther + c.spent;
+      }
+      candles.push({ time: b.start, open, high, low, close: run });
+      volume.push({ time: b.start, value: flow, up: run >= open });
+    }
+    return { candles, volume };
+  }
+
   function breakdown(txs) {
     const rows = new Map();
     for (const t of txs) {
@@ -234,7 +288,7 @@ const PnL = (() => {
 
   return {
     TYPES, CATEGORY_LABELS, DEFAULT_SETTINGS, PERIODS,
-    periodWindow, classify, balanceDelta, summarize, series, breakdown, topItems, toDisplayMoney
+    periodWindow, candleWindow, classify, balanceDelta, summarize, series, ohlc, breakdown, topItems, toDisplayMoney
   };
 })();
 

@@ -11,9 +11,24 @@ Reads your Roblox transactions through the economy API, stores the full history 
 | `api.js` | Roblox API client with a self-learning rate limiter (see *Rate limits*) |
 | `pnl.js` | P&L engine: classification, periods, metrics, chart series |
 | `background.js` | Service worker: deep scan / incremental sync, auto-sync every 30 min, daily USD→EUR rate |
-| `popup.html` / `popup.css` / `popup.js` | Dashboard – compact popup with the essentials, full-width view in a tab (⤢) |
+| `popup.html` / `popup.css` / `popup.js` | Dashboard – compact popup with the essentials, full trading-terminal view in a tab (⤢) |
+| `pricechart.js` | Candlestick / line / area price chart with volume and OHLC legend |
 | `share.js` | Renders the 1200×675 share image ("flex card") |
-| `lib/` | Dexie 4.0.8 and Chart.js 4.4.4, bundled locally (MV3 forbids remote code) |
+| `lib/` | Dexie 4.0.8 and TradingView Lightweight Charts™ 4.2.0 (Apache 2.0), bundled locally (MV3 forbids remote code) |
+
+## Popup vs. full view
+
+- **Popup:** the essentials – balance (with its change over the period), net P&L, four stat tiles and a **View chart** button.
+- **Full view** (View chart / ⤢): the same panels plus a TradingView-style chart, and breakdown by type, top items and recent transactions on the right.
+
+The chart treats your Robux balance like a stock:
+
+- OHLC candles – 1 h (1 Day), 4 h (1 Week), 1 day (1 Month), 1 week (1 Year / All) – with a volume pane (Robux moved) and crosshair.
+- Switch between **Balance** and **Net P&L**, and between candles, line and area, right in the chart card.
+- Hovering shows a value box next to the mouse (date, value, change, O/H/L/C, volume); the legend above the chart shows the same for the hovered candle.
+- Drag to pan, drag an axis (or pinch) to zoom; **Reset** returns to the default view. The mouse wheel scrolls the page.
+
+Balance candles are reconstructed backwards from the live balance (settled transactions only); the last P&L candle always equals the period's net P&L.
 
 ## Install (unpacked extension)
 

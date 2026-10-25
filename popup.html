@@ -23,6 +23,11 @@
     <symbol id="i-dollar" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></symbol>
     <symbol id="i-share" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></symbol>
     <symbol id="i-arrow" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></symbol>
+    <!-- chart type glyphs -->
+    <symbol id="i-candles" viewBox="0 0 24 24"><line x1="7" y1="3" x2="7" y2="21"/><rect x="4.5" y="7" width="5" height="9" rx="1" fill="currentColor"/><line x1="17" y1="3" x2="17" y2="21"/><rect x="14.5" y="5" width="5" height="7" rx="1"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></symbol>
+    <symbol id="i-line" viewBox="0 0 24 24"><polyline points="3 17 9 11 13 15 21 7"/></symbol>
+    <symbol id="i-area" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8v14H3z" fill="currentColor" fill-opacity=".3"/><polyline points="3 17 9 11 13 15 21 7"/></symbol>
   </svg>
 
   <header class="header">
@@ -34,6 +39,13 @@
         <div id="username" class="muted small">—</div>
       </div>
     </div>
+    <nav class="chips" id="periods" role="tablist" aria-label="Period">
+      <button type="button" data-period="1D"><span class="lg">1 Day</span><span class="sh">1D</span></button>
+      <button type="button" data-period="7D"><span class="lg">1 Week</span><span class="sh">1W</span></button>
+      <button type="button" data-period="1M"><span class="lg">1 Month</span><span class="sh">1M</span></button>
+      <button type="button" data-period="1Y"><span class="lg">1 Year</span><span class="sh">1Y</span></button>
+      <button type="button" data-period="ALL">All</button>
+    </nav>
     <div class="toolbar">
       <button id="btnShare" class="icon-btn" type="button" title="Share as image"><svg class="ic"><use href="#i-share"/></svg></button>
       <button id="btnTab" class="icon-btn popup-only" type="button" title="Open full dashboard"><svg class="ic"><use href="#i-expand"/></svg></button>
@@ -42,15 +54,8 @@
     </div>
   </header>
 
-  <div class="filterbar">
-    <nav class="chips" id="periods" role="tablist" aria-label="Period">
-      <button type="button" data-period="1D">1 Day</button>
-      <button type="button" data-period="7D">1 Week</button>
-      <button type="button" data-period="1M">1 Month</button>
-      <button type="button" data-period="1Y">1 Year</button>
-      <button type="button" data-period="ALL">All</button>
-    </nav>
-    <div class="status" title="">
+  <div class="statusbar">
+    <div class="status">
       <span id="syncDot" class="dot"></span>
       <span id="syncText" class="status-text">Not synced yet</span>
     </div>
@@ -67,7 +72,7 @@
           </div>
           <div class="hero-value accent"><svg class="rbx"><use href="#i-robux"/></svg><span id="balance">—</span></div>
           <div id="balanceDevex" class="hero-sub">—</div>
-          <div class="spark"><canvas id="balanceChart"></canvas></div>
+          <div class="hero-foot"><span id="balChange" class="quote-change">—</span> <span class="muted small periodName">—</span></div>
         </article>
 
         <article class="card hero-card glow-pnl" id="pnlCard">
@@ -114,36 +119,48 @@
         </div>
       </section>
 
-      <section class="card chart-card">
+      <!-- Full view: trading chart in place of the old cash-flow chart -->
+      <section class="card chart-card full-only">
         <div class="card-head">
-          <div>
-            <h2>Cash flow</h2>
-            <div class="muted small"><span id="txCount">—</span> · <span class="periodName">—</span>
-              <button id="btnMore" class="link popup-only" type="button">Details <svg class="ic"><use href="#i-arrow"/></svg></button>
-            </div>
-          </div>
-          <div class="legend">
-            <span><i class="sw green"></i>Income</span>
-            <span><i class="sw red"></i>Spending</span>
-            <span><i class="sw accent line"></i>Cumulative P&amp;L</span>
+          <div class="legend" id="mainLegend"></div>
+          <div class="chart-controls">
+            <nav class="seg" id="chartSeries" aria-label="Series">
+              <button type="button" data-series="balance">Balance</button>
+              <button type="button" data-series="pnl">Net P&amp;L</button>
+            </nav>
+            <nav class="seg" id="chartTypes" aria-label="Chart type">
+              <button type="button" data-type="candles" title="Candles"><svg class="ic"><use href="#i-candles"/></svg></button>
+              <button type="button" data-type="line" title="Line"><svg class="ic"><use href="#i-line"/></svg></button>
+              <button type="button" data-type="area" title="Area"><svg class="ic"><use href="#i-area"/></svg></button>
+            </nav>
+            <nav class="seg" aria-label="View">
+              <button type="button" id="btnResetView" class="reset-view" title="Reset view (zoom &amp; scroll)"><svg class="ic"><use href="#i-reset"/></svg><span>Reset</span></button>
+            </nav>
           </div>
         </div>
-        <div class="chart-wrap"><canvas id="flowChart"></canvas></div>
+        <div class="chart-host" id="mainChart"></div>
       </section>
+
+      <!-- Popup: no chart, just a way to it -->
+      <button id="btnViewChart" class="view-chart popup-only" type="button">
+        <svg class="ic"><use href="#i-candles"/></svg>
+        <span><b>View chart</b><small>Candles, volume, breakdown &amp; top items</small></span>
+        <svg class="ic arrow"><use href="#i-arrow"/></svg>
+      </button>
     </div>
 
-    <aside class="side-col">
-      <section class="card">
-        <div class="card-head"><h2>By type</h2></div>
-        <table class="table" id="breakdown"><tbody></tbody></table>
+    <aside class="side-col full-only">
+      <section class="card side-card">
+        <div class="card-head"><h2>By type</h2><span class="muted small periodName">—</span></div>
+        <div class="card-body"><table class="table" id="breakdown"><tbody></tbody></table></div>
       </section>
-      <section class="card">
+      <section class="card side-card">
         <div class="card-head"><h2>Top items</h2><span class="muted small">by net revenue</span></div>
-        <ol class="list ranked" id="topItems"></ol>
+        <div class="card-body"><ol class="list ranked" id="topItems"></ol></div>
       </section>
-      <section class="card">
+      <section class="card side-card recent-card">
         <div class="card-head"><h2>Recent</h2></div>
-        <ul class="list" id="recent"></ul>
+        <div class="card-body"><ul class="list" id="recent"></ul></div>
       </section>
     </aside>
   </main>
@@ -167,7 +184,7 @@
     <h3>Calculation</h3>
     <div class="form">
       <label>DevEx rate <span class="muted">USD per Robux</span>
-        <input id="sDevex" type="number" step="0.0001" min="0">
+        <input id="sDevexRate" type="number" step="0.0001" min="0">
       </label>
       <label>Marketplace fee <span class="muted">%</span>
         <input id="sFee" type="number" step="1" min="0" max="99">
@@ -190,6 +207,7 @@
       <button id="btnClear" class="btn danger" type="button">Delete local data</button>
     </div>
     <p class="muted small">All data stays in this browser. The extension only uses your existing roblox.com session.</p>
+    <p class="muted small">Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> Lightweight Charts™.</p>
   </aside>
 
   <div id="shareModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="shareTitle" hidden>
@@ -216,9 +234,10 @@
   </div>
 
   <script src="lib/dexie.min.js"></script>
-  <script src="lib/chart.umd.min.js"></script>
+  <script src="lib/lightweight-charts.standalone.production.js"></script>
   <script src="db.js"></script>
   <script src="pnl.js"></script>
+  <script src="pricechart.js"></script>
   <script src="share.js"></script>
   <script src="popup.js"></script>
 </body>
